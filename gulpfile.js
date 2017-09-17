@@ -78,7 +78,7 @@ gulp.task('test.compile', ['compile'], function(done) {
       .pipe(sourcemaps.init())
       .pipe(tsProject())
       .on('error', onError)
-      .js.pipe(sourcemaps.write('.', {includeContent: false, sourceRoot: '../../test'}))
+      .js.pipe(sourcemaps.write('.', {includeContent: true, sourceRoot: '../../test'}))
       .pipe(gulp.dest('built/'));
 });
 
