@@ -159,14 +159,15 @@ testFn('golden tests with transformer', () => {
       const jsSources: {[fileName: string]: string} = {};
       let targetSource: ts.SourceFile|undefined = undefined;
       if (TEST_FILTER && TEST_FILTER.fileName) {
-        for (const [path, source] of tsSources.entries()) {
-          if (!TEST_FILTER.fileName.test(path)) continue;
+        tsSources.forEach((path, source) =>{
+          if (TEST_FILTER.fileName != null && !TEST_FILTER.fileName.test(path)) return;
           if (targetSource) {
             throw new Error(
                 `TEST_FILTER matches more than one file: ${targetSource.fileName} vs ${path}`);
           }
           targetSource = program.getSourceFile(path);
-        }
+        });
+        
         if (!targetSource) {
           throw new Error(`TEST_FILTER matched no file: ${TEST_FILTER.fileName} vs ${
               Array.from(tsSources.keys())}`);
