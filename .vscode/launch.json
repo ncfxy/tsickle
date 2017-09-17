@@ -5,7 +5,7 @@
       "name": "Run Tests",
       "type": "node",
       "request": "launch",
-      "program": "${workspaceRoot}/node_modules/.bin/_mocha",
+      "program": "${workspaceRoot}/node_modules/mocha/bin/_mocha",
       "args": [
         "--colors",
         "--timeout=0",
@@ -26,7 +26,7 @@
       "name": "Run file based tests",
       "type": "node",
       "request": "launch",
-      "program": "${workspaceRoot}/node_modules/.bin/_mocha",
+      "program": "${workspaceRoot}/node_modules/mocha/bin/_mocha",
       "args": [
         "--colors",
         "--timeout=0",
