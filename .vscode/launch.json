@@ -38,7 +38,8 @@
       ],
       "env": {
         "NODE_ENV": "development",
-        "TEST_FILTER": "^functions/two_jsdoc_blocks"
+        "TEST_FILTER": "^ncfxyLearn/ncfxyLearn",
+        "UPDATE_GOLDENS": "true"
       },
       "console": "internalConsole",
       "sourceMaps": true,
