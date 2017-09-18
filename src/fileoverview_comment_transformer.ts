@@ -85,5 +85,5 @@ function addNewFileoverviewComment(sf: ts.SourceFile): ts.SourceFile {
   let syntheticFirstStatement = createNotEmittedStatement(sf);
   syntheticFirstStatement = ts.addSyntheticTrailingComment(
       syntheticFirstStatement, ts.SyntaxKind.MultiLineCommentTrivia, commentText, true);
-  return updateSourceFileNode(sf, ts.createNodeArray([syntheticFirstStatement, ...sf.statements]));
+  return updateSourceFileNode(sf, ts.createNodeArray([/* don't output this syntheticFirstStatement,*/ ...sf.statements]));
 }

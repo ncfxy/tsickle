@@ -132,7 +132,7 @@ testFn('golden tests with transformer', () => {
       const transformerHost: tsickle.TsickleHost = {
         es5Mode: true,
         prelude: '',
-        googmodule: true,
+        googmodule: false,
         // See test_files/jsdoc_types/nevertyped.ts.
         typeBlackListPaths: new Set(['test_files/jsdoc_types/nevertyped.ts']),
         convertIndexImportShorthand: true,

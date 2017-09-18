@@ -49,7 +49,7 @@ export abstract class Rewriter {
    * visit traverses a Node, recursively writing all nodes not handled by this.maybeProcess.
    */
   visit(node: ts.Node) {
-    // this.logWithIndent('node: ' + ts.SyntaxKind[node.kind]);
+    this.logWithIndent('node: ' + ts.SyntaxKind[node.kind]);
     this.indent++;
     try {
       if (!this.maybeProcess(node)) {
