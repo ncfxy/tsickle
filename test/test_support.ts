@@ -107,6 +107,7 @@ export function createSourceCachingHost(
     fileName = path.normalize(fileName);
     if (fileName === cachedLibPath) return cachedLib;
     if (path.isAbsolute(fileName)) fileName = path.relative(process.cwd(), fileName);
+    fileName = glob.sync(fileName)[0];
     const contents = sources.get(fileName);
     if (contents !== undefined) {
       return ts.createSourceFile(fileName, contents, ts.ScriptTarget.Latest, true);
@@ -117,6 +118,7 @@ export function createSourceCachingHost(
   const originalFileExists = host.fileExists;
   host.fileExists = (fileName: string): boolean => {
     if (path.isAbsolute(fileName)) fileName = path.relative(process.cwd(), fileName);
+    fileName = glob.sync(fileName)[0];
     if (sources.has(fileName)) {
       return true;
     }
@@ -185,7 +187,7 @@ export function goldenTests(): GoldenFileTest[] {
   const testDirs = testNames.map(testName => path.join(basePath, testName))
                        .filter(testDir => fs.statSync(testDir).isDirectory());
   const tests = testDirs.map(testDir => {
-    testDir = path.relative(process.cwd(), testDir);
+    testDir = glob.sync(path.relative(process.cwd(), testDir))[0];
     let tsPaths = glob.sync(path.join(testDir, '**/*.ts'));
     tsPaths = tsPaths.concat(glob.sync(path.join(testDir, '*.tsx')));
     tsPaths = tsPaths.filter(p => !p.match(/\.tsickle\./) && !p.match(/\.decorated\./));
