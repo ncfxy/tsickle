@@ -564,6 +564,8 @@ class Annotator extends ClosureRewriter {
   private templateSpanStackCount = 0;
   private polymerBehaviorStackCount = 0;
 
+  private namespaceList:string[] = [];
+
   constructor(
       typeChecker: ts.TypeChecker, file: ts.SourceFile, host: AnnotatorHost,
       private tsHost?: ts.ModuleResolutionHost, private tsOpts?: ts.CompilerOptions,
@@ -930,6 +932,14 @@ class Annotator extends ClosureRewriter {
           return this.currentDecoratorConverter.maybeProcessDecorator(node as ts.Decorator);
         }
         return false;
+      case ts.SyntaxKind.ModuleDeclaration:
+        const myModule = node as ts.ModuleDeclaration;
+        const namespaceName = myModule.name.getFullText();
+        this.namespaceList.push(namespaceName);
+        this.emit(this.namespaceList.join('.')+'\n');
+        this.visit(myModule.body as ts.Node);
+        this.namespaceList = this.namespaceList.slice(0,this.namespaceList.length-1);
+        return true;
       default:
         break;
     }
