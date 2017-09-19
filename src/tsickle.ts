@@ -565,6 +565,8 @@ class Annotator extends ClosureRewriter {
   private polymerBehaviorStackCount = 0;
 
   private namespaceList:string[] = [];
+  private nowClass:string|undefined = undefined;
+  private nowClassHeritageClause: string[] = [];
 
   constructor(
       typeChecker: ts.TypeChecker, file: ts.SourceFile, host: AnnotatorHost,
@@ -737,9 +739,10 @@ class Annotator extends ClosureRewriter {
       case ts.SyntaxKind.Constructor:
         const ctor = node as ts.ConstructorDeclaration;
         this.emitFunctionType([ctor]);
+        this.emit(this.namespaceList.join('.')+'.'+this.nowClass + ' = function');
         // Write the "constructor(...) {" bit, but iterate through any
         // parameters if given so that we can examine them more closely.
-        this.writeNodeFrom(ctor, ctor.getStart());
+        this.writeNodeFrom(ctor, ctor.getStart()+11);
         return true;
       case ts.SyntaxKind.ArrowFunction:
         // It's difficult to annotate arrow functions due to a bug in
@@ -747,11 +750,10 @@ class Annotator extends ClosureRewriter {
         // through unannotated.
         return false;
       case ts.SyntaxKind.FunctionDeclaration:
-      case ts.SyntaxKind.MethodDeclaration:
       case ts.SyntaxKind.GetAccessor:
       case ts.SyntaxKind.SetAccessor:
-        const fnDecl = node as ts.FunctionLikeDeclaration;
-        const tags = hasExportingDecorator(node, this.typeChecker) ? [{tagName: 'export'}] : [];
+        let fnDecl = node as ts.FunctionLikeDeclaration;
+        let tags = hasExportingDecorator(node, this.typeChecker) ? [{tagName: 'export'}] : [];
 
         if (!fnDecl.body) {
           // Two cases: abstract methods and overloaded methods/functions.
@@ -761,6 +763,13 @@ class Annotator extends ClosureRewriter {
         }
 
         this.emitFunctionType([fnDecl], tags);
+        this.writeNodeFrom(fnDecl, fnDecl.getStart());
+        return true;
+      case ts.SyntaxKind.MethodDeclaration:
+        fnDecl = node as ts.FunctionLikeDeclaration;
+        tags = hasExportingDecorator(node, this.typeChecker) ? [{tagName: 'export'}] : [];
+        this.emitFunctionType([fnDecl], tags);
+        this.emit(this.namespaceList.join('.')+'.'+this.nowClass+'.');
         this.writeNodeFrom(fnDecl, fnDecl.getStart());
         return true;
       case ts.SyntaxKind.TypeAliasDeclaration:
@@ -855,6 +864,9 @@ class Annotator extends ClosureRewriter {
           }
           return true;
         }
+        if(this.nowClass){
+          return true;
+        }
         break;
       case ts.SyntaxKind.PropertyAssignment:
         const pa = node as ts.PropertyAssignment;
@@ -934,11 +946,46 @@ class Annotator extends ClosureRewriter {
         return false;
       case ts.SyntaxKind.ModuleDeclaration:
         const myModule = node as ts.ModuleDeclaration;
-        const namespaceName = myModule.name.getFullText();
+        const namespaceName = myModule.name.getFullText().trim();
         this.namespaceList.push(namespaceName);
-        this.emit(this.namespaceList.join('.')+'\n');
         this.visit(myModule.body as ts.Node);
         this.namespaceList = this.namespaceList.slice(0,this.namespaceList.length-1);
+        return true;
+      case ts.SyntaxKind.ModuleBlock:
+        const moduleBlock = node as ts.ModuleBlock;
+        ts.forEachChild(node, child => {
+          this.visit(child);
+        });
+        return true;
+      case ts.SyntaxKind.ExportKeyword:
+        return true;
+      case ts.SyntaxKind.ExpressionStatement:
+        const statement = node as ts.ExpressionStatement;
+        // super Find super keyWords;
+        if(statement.expression.kind === ts.SyntaxKind.CallExpression){
+          const callSta = statement.expression as ts.CallExpression;
+          if(callSta.expression.kind === ts.SyntaxKind.SuperKeyword){
+            // constructor super call
+            this.emit('goog.base(this');
+            for(let i = 0;i < callSta.arguments.length;i++){
+              this.emit(', '+callSta.arguments[i].getFullText());
+            }
+            this.emit(');');
+            return true;
+          }else if(callSta.expression.kind === ts.SyntaxKind.PropertyAccessExpression){
+            const prop = callSta.expression as ts.PropertyAccessExpression;
+            if(prop.expression.kind === ts.SyntaxKind.SuperKeyword){
+              this.emit('goog.base(this, ');
+              this.emit('\''+prop.name.text+'\'');
+              for(let i = 0;i < callSta.arguments.length;i++){
+                this.emit(', '+callSta.arguments[i].getFullText());
+              }
+              this.emit(');');
+              return true;
+            }
+          }
+        }
+        this.writeNode(node);
         return true;
       default:
         break;
@@ -1210,26 +1257,52 @@ class Annotator extends ClosureRewriter {
 
   private visitClassDeclaration(classDecl: ts.ClassDeclaration) {
     this.addSourceMapping(classDecl);
-    const oldDecoratorConverter = this.currentDecoratorConverter;
-    this.currentDecoratorConverter =
-        new decorator.DecoratorClassVisitor(this.typeChecker, this, classDecl, this.importedNames);
-
-    const docTags = this.getJSDoc(classDecl) || [];
-    if (hasModifierFlag(classDecl, ts.ModifierFlags.Abstract)) {
-      docTags.push({tagName: 'abstract'});
+    const className = classDecl.name;
+    if(className){
+      this.nowClass = className.text;
     }
-
-    if (!this.host.untyped) {
-      this.maybeAddTemplateClause(docTags, classDecl);
-      this.maybeAddHeritageClauses(docTags, classDecl);
+    const classHeritage = classDecl.heritageClauses;
+    if(classHeritage && classHeritage.length > 0){
+      for(let index = 0;index < classHeritage.length;index++){
+        const heritage = classHeritage[index];
+        if(heritage.types && heritage.types.length > 0){
+          for(let i = 0; i < heritage.types.length;i++){
+            const type = heritage.types[i];
+            this.nowClassHeritageClause.push(type.getFullText().trim());
+          }
+        }
+      }
     }
+    ts.forEachChild(classDecl, child => {
+      if(child.kind === ts.SyntaxKind.Identifier){
+        return;
+      }
+      if(child.kind === ts.SyntaxKind.HeritageClause){
+        return;
+      }
+      this.visit(child);
+    });
+    // const oldDecoratorConverter = this.currentDecoratorConverter;
+    // this.currentDecoratorConverter =
+    //     new decorator.DecoratorClassVisitor(this.typeChecker, this, classDecl, this.importedNames);
 
-    this.emit('\n');
-    if (docTags.length > 0) this.emit(jsdoc.toString(docTags));
-    decorator.visitClassContentIncludingDecorators(classDecl, this, this.currentDecoratorConverter);
-    this.emitTypeAnnotationsHelper(classDecl);
+    // const docTags = this.getJSDoc(classDecl) || [];
+    // if (hasModifierFlag(classDecl, ts.ModifierFlags.Abstract)) {
+    //   docTags.push({tagName: 'abstract'});
+    // }
 
-    this.currentDecoratorConverter = oldDecoratorConverter;
+    // if (!this.host.untyped) {
+    //   this.maybeAddTemplateClause(docTags, classDecl);
+    //   this.maybeAddHeritageClauses(docTags, classDecl);
+    // }
+
+    // this.emit('\n');
+    // if (docTags.length > 0) this.emit(jsdoc.toString(docTags));
+    // decorator.visitClassContentIncludingDecorators(classDecl, this, this.currentDecoratorConverter);
+    // this.emitTypeAnnotationsHelper(classDecl);
+
+    // this.currentDecoratorConverter = oldDecoratorConverter;
+    this.nowClass = undefined;
     return true;
   }
 
