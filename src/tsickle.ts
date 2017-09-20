@@ -738,11 +738,20 @@ class Annotator extends ClosureRewriter {
         return true;
       case ts.SyntaxKind.Constructor:
         const ctor = node as ts.ConstructorDeclaration;
-        this.emitFunctionType([ctor]);
+        const constructorTag: jsdoc.Tag = {
+          tagName: 'constructor'
+        };
+        const extendsTag: jsdoc.Tag = {
+          tagName: 'extends',
+          type: this.nowClassHeritageClause[0]
+        };
+        
+        this.emitFunctionType([ctor], [constructorTag, extendsTag]);
         this.emit(this.namespaceList.join('.')+'.'+this.nowClass + ' = function');
         // Write the "constructor(...) {" bit, but iterate through any
         // parameters if given so that we can examine them more closely.
         this.writeNodeFrom(ctor, ctor.getStart()+11);
+        this.emit('\ngoog.inherits('+this.namespaceList.join('.')+'.'+this.nowClass+', '+this.nowClassHeritageClause+');\n');
         return true;
       case ts.SyntaxKind.ArrowFunction:
         // It's difficult to annotate arrow functions due to a bug in
@@ -769,8 +778,16 @@ class Annotator extends ClosureRewriter {
         fnDecl = node as ts.FunctionLikeDeclaration;
         tags = hasExportingDecorator(node, this.typeChecker) ? [{tagName: 'export'}] : [];
         this.emitFunctionType([fnDecl], tags);
-        this.emit(this.namespaceList.join('.')+'.'+this.nowClass+'.');
-        this.writeNodeFrom(fnDecl, fnDecl.getStart());
+        let functionName = '';
+        if(fnDecl.name){
+          functionName = fnDecl.name.getText().trim();
+        }
+        this.emit(this.namespaceList.join('.')+'.'+this.nowClass+'.prototype.'+functionName+' = function');
+        if(fnDecl.name){
+          this.writeNodeFrom(fnDecl, fnDecl.name.getEnd());
+        }else{
+          this.writeNodeFrom(fnDecl, fnDecl.getStart());
+        }
         return true;
       case ts.SyntaxKind.TypeAliasDeclaration:
         this.writeNode(node);
@@ -976,7 +993,7 @@ class Annotator extends ClosureRewriter {
             const prop = callSta.expression as ts.PropertyAccessExpression;
             if(prop.expression.kind === ts.SyntaxKind.SuperKeyword){
               this.emit('goog.base(this, ');
-              this.emit('\''+prop.name.text+'\'');
+              this.emit("'"+prop.name.text+"'");
               for(let i = 0;i < callSta.arguments.length;i++){
                 this.emit(', '+callSta.arguments[i].getFullText());
               }

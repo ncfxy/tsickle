@@ -25,7 +25,6 @@ declare module wap.core.app{
   }
 }
 
-
 goog.provide('wap.core.ui.contact.UserSelectInputUserCountDialogContent');
 
 goog.require('goog.ui.Component');
@@ -42,7 +41,6 @@ namespace wap.core.ui.contact{
 
     /**
      * @override
-     * @param {Element} $element 
      * 
      */
     decorateInternal($element: Element){
