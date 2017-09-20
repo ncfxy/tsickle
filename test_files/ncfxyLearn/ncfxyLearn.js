@@ -4,7 +4,7 @@ goog.require('wap.core.app.View');
 /**
  * @constructor
  * @extends {goog.ui.Component}
- * @param {!Object} opt_options
+ * @param {(undefined|!Object)=} opt_options
  * @param {(undefined|!goog.dom.DomHelper)=} opt_domHelper
  */
 wap.core.ui.contact.UserSelectInputUserCountDialogContent = function (opt_options, opt_domHelper) {
@@ -42,3 +42,4 @@ wap.core.ui.contact.UserSelectInputUserCountDialogContent.prototype.disposeInter
     goog.base(this, "disposeInternal");
 };
 wap.core.app.View.registerComponent('wap.core.ui.contact.UserSelectInputUserCountDialogContent', wap.core.ui.contact.UserSelectInputUserCountDialogContent);
+var /** @type {?} */ a = new wap.core.ui.contact.UserSelectInputUserCountDialogContent();

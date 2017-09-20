@@ -5,7 +5,7 @@ declare module goog{
 }
 declare module goog.dom{
   class DomHelper{
-
+    haha();
   }
 }
 declare module goog.ui{
@@ -34,7 +34,7 @@ namespace wap.core.ui.contact{
   export class UserSelectInputUserCountDialogContent extends goog.ui.Component{
     option_: Object;
 
-    constructor(opt_options: Object, opt_domHelper?:goog.dom.DomHelper){
+    constructor(opt_options?: Object, opt_domHelper?:goog.dom.DomHelper){
       super(opt_domHelper);
       this.option_ = opt_options || {};
     }
