@@ -4,11 +4,48 @@ import * as minimist from 'minimist';
 import * as mkdirp from 'mkdirp';
 import * as path from 'path';
 import * as ts from 'typescript';
+import * as glob from 'glob';
 
 import * as cliSupport from './cli_support';
 import * as tsickel from './tsickle';
 import {ModulesManifest} from './tsickle';
 import {createSourceReplacingCompilerHost} from './util';
+
+/** Base compiler options to be customized and exposed. */
+const baseCompilerOptions: ts.CompilerOptions = {
+    target: ts.ScriptTarget.ES2015,
+    // Disable searching for @types typings. This prevents TS from looking
+    // around for a node_modules directory.
+    types: [],
+    skipDefaultLibCheck: true,
+    experimentalDecorators: true,
+    module: ts.ModuleKind.CommonJS,
+    strictNullChecks: true,
+    noImplicitUseStrict: true,
+};
+
+/** The TypeScript compiler options used by the test suite. */
+export const compilerOptions: ts.CompilerOptions = {
+    ...baseCompilerOptions,
+    emitDecoratorMetadata: true,
+    noEmitHelpers: true,
+    jsx: ts.JsxEmit.React,
+    // Flags below are needed to make sure source paths are correctly set on write calls.
+    rootDir: path.resolve(process.cwd()),
+    outDir: './ncfxyOut',
+};
+
+const {cachedLibPath, cachedLib} = (() => {
+    const host = ts.createCompilerHost(baseCompilerOptions);
+    const fn = host.getDefaultLibFileName(baseCompilerOptions);
+    const p = ts.getDefaultLibFilePath(baseCompilerOptions);
+    return {
+        // Normalize path to fix mixed/wrong directory separators on Windows.
+        cachedLibPath: path.normalize(p),
+        cachedLib: host.getSourceFile(fn, baseCompilerOptions.target!),
+    };
+})();
+
 
 /**
  * Tsickle settings passed on the command line.
@@ -105,12 +142,52 @@ function loadTscConfig(args: string[]):
     return {options, fileNames, errors:[]};
 }
 
+export function createSourceCachingHost(
+    sources: Map<string, string>,
+    tsCompilerOptions: ts.CompilerOptions = compilerOptions): ts.CompilerHost {
+  const host = ts.createCompilerHost(tsCompilerOptions);
+
+  host.getSourceFile = (fileName: string, languageVersion: ts.ScriptTarget,
+                        onError?: (msg: string) => void): ts.SourceFile => {
+    // Normalize path to fix wrong directory separators on Windows which
+    // would break the equality check.
+    fileName = path.normalize(fileName);
+    if (fileName === cachedLibPath) return cachedLib;
+    if (path.isAbsolute(fileName)) fileName = path.relative(process.cwd(), fileName);
+    fileName = glob.sync(fileName)[0];
+    const contents = sources.get(fileName);
+    if (contents !== undefined) {
+      return ts.createSourceFile(fileName, contents, ts.ScriptTarget.Latest, true);
+    }
+    throw new Error(
+        'unexpected file read of ' + fileName + ' not in ' + Array.from(sources.keys()));
+  };
+  const originalFileExists = host.fileExists;
+  host.fileExists = (fileName: string): boolean => {
+    if (path.isAbsolute(fileName)) fileName = path.relative(process.cwd(), fileName);
+    fileName = glob.sync(fileName)[0];
+    if (sources.has(fileName)) {
+      return true;
+    }
+    return originalFileExists.call(host, fileName);
+  };
+
+  return host;
+}
+
 /**
  * Compiles TypeScript code into Closure-compiler-ready JS.
  */
 export function toClosureJS(options: ts.CompilerOptions, fileNames: string[], settings: Settings, writeFile?: ts.WriteFileCallback): tsickel.EmitResult {
-    const compileHost = ts.createCompilerHost(options);
-    const program = ts.createProgram(fileNames, options, compileHost);
+    // const compileHost = ts.createCompilerHost(options);
+    const tsSources = new Map<string, string>();
+    for (const tsFile of fileNames) {
+      const tsSource = fs.readFileSync(tsFile, 'utf-8');
+      tsSources.set(tsFile, tsSource);
+    }
+    const compileHost = createSourceCachingHost(tsSources, compilerOptions);
+    
+    const program = ts.createProgram(fileNames, compilerOptions, compileHost);
     const transformerHost: tsickel.TsickleHost = {
         shouldSkipTsickleProcessing: (fileName: string) => {
             return fileNames.indexOf(fileName) === -1;
@@ -128,15 +205,15 @@ export function toClosureJS(options: ts.CompilerOptions, fileNames: string[], se
         logWarning: (warning) => console.error(tsickel.formatDiagnostics([warning]))
     };
     const diagnostics = ts.getPreEmitDiagnostics(program);
-    if(diagnostics.length > 0){
-        return {
-            diagnostics,
-            modulesManifest: new ModulesManifest(),
-            externs: {},
-            emitSkipped: true,
-            emittedFiles: []
-        };
-    }
+    // if(diagnostics.length > 0){
+    //     return {
+    //         diagnostics,
+    //         modulesManifest: new ModulesManifest(),
+    //         externs: {},
+    //         emitSkipped: true,
+    //         emittedFiles: []
+    //     };
+    // }
     return tsickel.emitWithTsickle(program, transformerHost, compileHost, options, undefined, writeFile);
 }
 
@@ -164,10 +241,10 @@ function main(args: string[]): number {
             fs.writeFileSync(filePath, contents, {encoding: 'utf-8'});
         }
     );
-    if(result.diagnostics.length) {
-        console.error(tsickel.formatDiagnostics(result.diagnostics));
-        return 1;
-    }
+    // if(result.diagnostics.length) {
+    //     console.error(tsickel.formatDiagnostics(result.diagnostics));
+    //     return 1;
+    // }
 
     if(settings.externsPath) {
         mkdirp.sync(path.dirname(settings.externsPath));
