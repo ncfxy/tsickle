@@ -251,6 +251,15 @@ class ClosureRewriter extends Rewriter {
       if (hasModifierFlag(fnDecl, ts.ModifierFlags.Abstract)) {
         newDoc.push({tagName: 'abstract'});
       }
+      if(hasModifierFlag(fnDecl, ts.ModifierFlags.Private)) {
+        newDoc.push({tagName: 'private'});
+      }
+      if(hasModifierFlag(fnDecl, ts.ModifierFlags.Public)) {
+        newDoc.push({tagName: 'public'});
+      }
+      if(hasModifierFlag(fnDecl, ts.ModifierFlags.Protected)) {
+        newDoc.push({tagName: 'protected'});
+      }
 
       // Add any @template tags.
       // Multiple declarations with the same template variable names should work:
@@ -717,7 +726,7 @@ class Annotator extends ClosureRewriter {
         // See b/64389806
         if (this.polymerBehaviorStackCount === 0 &&
             varDecl.name.kind === ts.SyntaxKind.Identifier) {
-          this.emitJSDocType(varDecl);
+          // this.emitJSDocType(varDecl);
         }
         return false;
       case ts.SyntaxKind.ClassDeclaration:
@@ -875,13 +884,25 @@ class Annotator extends ClosureRewriter {
           if (isPolymerBehavior) {
             this.polymerBehaviorStackCount++;
           }
-          this.writeNodeFrom(node, node.getStart());
+          const isEnum = docTags.some(t => t.tagName === 'enum');
+          const statement = node as ts.VariableStatement;
+          if(isEnum && statement.declarationList.declarations){
+            const text = node.getFullText();
+            const comments = ts.getLeadingCommentRanges(text, 0);
+            
+            // this.writeRange(node, node.getStart(), statement.declarationList.declarations[0].getStart());
+            this.emit(this.namespaceList.join('.')+'.');
+            this.writeNodeFrom(node, statement.declarationList.declarations[0].getStart());
+          }else{
+            this.writeNodeFrom(node, node.getStart());
+          }
+
           if (isPolymerBehavior) {
             this.polymerBehaviorStackCount--;
           }
           return true;
         }
-        if(this.nowClass){
+        if(this.nowClass && node.kind === ts.SyntaxKind.PropertyDeclaration){
           return true;
         }
         break;

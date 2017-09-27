@@ -16,7 +16,8 @@ const baseCompilerOptions: ts.CompilerOptions = {
     target: ts.ScriptTarget.ES2015,
     // Disable searching for @types typings. This prevents TS from looking
     // around for a node_modules directory.
-    types: [],
+    types: ['node', 'myclosure', 'closure-library.ts'],
+    typeRoots: ["C:/Users/fan_x/Desktop/my-write-js-place/node_modules/@types"],
     skipDefaultLibCheck: true,
     experimentalDecorators: true,
     module: ts.ModuleKind.CommonJS,
@@ -32,7 +33,9 @@ export const compilerOptions: ts.CompilerOptions = {
     jsx: ts.JsxEmit.React,
     // Flags below are needed to make sure source paths are correctly set on write calls.
     rootDir: path.resolve(process.cwd()),
-    outDir: './ncfxyOut',
+    outDir: 'ncfxyOut',
+    declaration:true,
+    declarationDir:"ncfxyOutDeclaration"
 };
 
 const {cachedLibPath, cachedLib} = (() => {
@@ -122,22 +125,27 @@ function loadTscConfig(args: string[]):
     const tsFileArguments = fileNames;
 
     // Read further settings from tsconfig.json.
-    const projectDir = options.project || '.';
-    const configFileName = path.join(projectDir, 'tsconfig.json');
-    const {config: json, error} = 
-        ts.readConfigFile(configFileName, path => fs.readFileSync(path, 'utf-8'));
-    if(error){
-        return {options:{}, fileNames: [], errors: [error]};
-    }
-    ({options, fileNames, errors} =
-        ts.parseJsonConfigFileContent(json, ts.sys, projectDir, options, configFileName));
+    // Don't read from tsconfig.json
+    // const projectDir = options.project || '.';
+    // const configFileName = path.join(projectDir, 'tsconfig.json');
+    // const {config: json, error} = 
+    //     ts.readConfigFile(configFileName, path => fs.readFileSync(path, 'utf-8'));
+    // if(error){
+    //     return {options:{}, fileNames: [], errors: [error]};
+    // }
+    // ({options, fileNames, errors} =
+    //     ts.parseJsonConfigFileContent(json, ts.sys, projectDir, options, configFileName));
     
-    if(errors.length > 0){
-        return {options: {}, fileNames: [], errors};
-    }
+    // if(errors.length > 0){
+    //     return {options: {}, fileNames: [], errors};
+    // }
 
-    // if file arguments were given to the typescript transpiler then transpile only those files
-    fileNames = tsFileArguments.length > 0 ? tsFileArguments : fileNames;
+    // // if file arguments were given to the typescript transpiler then transpile only those files
+    // fileNames = tsFileArguments.length > 0 ? tsFileArguments : fileNames;
+
+    options = {
+        module: ts.ModuleKind.CommonJS
+    };
 
     return {options, fileNames, errors:[]};
 }
@@ -158,9 +166,12 @@ export function createSourceCachingHost(
     const contents = sources.get(fileName);
     if (contents !== undefined) {
       return ts.createSourceFile(fileName, contents, ts.ScriptTarget.Latest, true);
+    }else{
+        const sourceContent = fs.readFileSync(fileName, 'utf-8');
+        return ts.createSourceFile(fileName, sourceContent, ts.ScriptTarget.Latest, true);
     }
-    throw new Error(
-        'unexpected file read of ' + fileName + ' not in ' + Array.from(sources.keys()));
+    // throw new Error(
+    //     'unexpected file read of ' + fileName + ' not in ' + Array.from(sources.keys()));
   };
   const originalFileExists = host.fileExists;
   host.fileExists = (fileName: string): boolean => {

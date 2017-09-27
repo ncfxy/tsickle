@@ -5,7 +5,10 @@
       "name": "Run ncfxyConvertToClosure",
       "type": "node",
       "request": "launch",
-      "program": "${workspaceRoot}/dist/js/all.js"//"${workspaceRoot}/built/src/ncfxyConvertToClosure.js"
+      "program": "${workspaceRoot}/built/src/ncfxyConvertToClosure.js",
+      "args": [
+        "test_files/ncfxyLearn/ncfxyLearn.ts"
+      ]
     },
     {
       "name": "Run Tests",

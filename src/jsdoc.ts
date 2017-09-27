@@ -167,7 +167,10 @@ export function parseContents(commentText: string): {tags: Tag[], warnings?: str
         tagName = 'return';
       }
       let type: string|undefined;
-      if (JSDOC_TAGS_BLACKLIST.has(tagName)) {
+      
+      if(tagName === 'enum'){
+          // Allow enum in our project.
+      } else if (JSDOC_TAGS_BLACKLIST.has(tagName)) {
         warnings.push(`@${tagName} annotations are redundant with TypeScript equivalents`);
         continue;  // Drop the tag so Closure won't process it.
       } else if (JSDOC_TAGS_WITH_TYPES.has(tagName) && text[0] === '{') {
