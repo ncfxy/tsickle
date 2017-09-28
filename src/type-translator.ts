@@ -176,7 +176,7 @@ export class TypeTranslator {
     }
     const alias = this.symbolsToAliasedNames.get(symAlias);
     if (alias) return alias;
-    if (useFqn && this.isForExterns) {
+    if (useFqn /*&& this.isForExterns*/) {
       // For regular type emit, we can use TypeScript's naming rules, as they match Closure's name
       // scoping rules. However when emitting externs files for ambients, naming rules change. As
       // Closure doesn't support externs modules, all names must be global and use global fully
@@ -289,7 +289,7 @@ export class TypeTranslator {
     const mask = (lastFlag << 1) - 1;
     switch (type.flags & mask) {
       case ts.TypeFlags.Any:
-        return '?';
+        return '*';
       case ts.TypeFlags.String:
       case ts.TypeFlags.StringLiteral:
         return 'string';

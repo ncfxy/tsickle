@@ -791,7 +791,9 @@ class Annotator extends ClosureRewriter {
         if(fnDecl.name){
           functionName = fnDecl.name.getText().trim();
         }
-        this.emit(this.namespaceList.join('.')+'.'+this.nowClass+'.prototype.'+functionName+' = function');
+        const isStatic = hasModifierFlag(fnDecl, ts.ModifierFlags.Static);
+
+        this.emit(this.namespaceList.join('.')+'.'+this.nowClass+(isStatic?'': '.prototype')+'.'+functionName+' = function');
         if(fnDecl.name){
           this.writeNodeFrom(fnDecl, fnDecl.name.getEnd());
         }else{
@@ -903,6 +905,11 @@ class Annotator extends ClosureRewriter {
           return true;
         }
         if(this.nowClass && node.kind === ts.SyntaxKind.PropertyDeclaration){
+          // const isStatic = hasModifierFlag(node, ts.ModifierFlags.Static);
+          // const propertyDecl = node as ts.PropertyDeclaration;
+          // this.emit("\n");
+          // this.emitJSDocType(node);
+          // this.emit(this.namespaceList.join('.')+'.'+this.nowClass+(isStatic?'': '.prototype')+'.'+propertyDecl.name.getText()+';');
           return true;
         }
         break;
@@ -1306,6 +1313,7 @@ class Annotator extends ClosureRewriter {
         if(heritage.types && heritage.types.length > 0){
           for(let i = 0; i < heritage.types.length;i++){
             const type = heritage.types[i];
+            this.nowClassHeritageClause = this.nowClassHeritageClause.slice(this.nowClassHeritageClause.length);
             this.nowClassHeritageClause.push(type.getFullText().trim());
           }
         }
