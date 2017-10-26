@@ -278,7 +278,7 @@ export class TypeTranslator {
     }
 
     // tsickle cannot generate types for non-ambient namespaces.
-    if (isNamespace && !isAmbient) return '?';
+    // if (isNamespace && !isAmbient) return '?';
 
     // Types in externs cannot reference types from external modules.
     // However ambient types in modules get moved to externs, too, so type references work and we
