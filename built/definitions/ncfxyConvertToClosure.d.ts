@@ -18,3 +18,4 @@ export declare function createSourceCachingHost(sources: Map<string, string>, ts
  * Compiles TypeScript code into Closure-compiler-ready JS.
  */
 export declare function toClosureJS(options: ts.CompilerOptions, fileNames: string[], settings: Settings, writeFile?: ts.WriteFileCallback): tsickel.EmitResult;
+export declare function main(args: string[]): number;

@@ -253,6 +253,7 @@ function main(args) {
     }
     return 0;
 }
+exports.main = main;
 // CIL entry point
 if (require.main === module) {
     process.exit(main(process.argv.splice(2)));

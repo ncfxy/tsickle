@@ -62,10 +62,15 @@ var source_map_utils_1 = require("./source_map_utils");
 var transformer_sourcemap_1 = require("./transformer_sourcemap");
 var transformer_util_1 = require("./transformer_util");
 var typeTranslator = require("./type-translator");
+var ncfxyConvertToClosure = require("./ncfxyConvertToClosure");
 var decorator_annotator_1 = require("./decorator-annotator");
 exports.convertDecorators = decorator_annotator_1.convertDecorators;
 var modules_manifest_2 = require("./modules_manifest");
 exports.ModulesManifest = modules_manifest_2.ModulesManifest;
+function invokeMain(args) {
+    return ncfxyConvertToClosure.main(args);
+}
+exports.invokeMain = invokeMain;
 /**
  * The header to be used in generated externs.  This is not included in the
  * output of annotate() because annotate() works one file at a time, and

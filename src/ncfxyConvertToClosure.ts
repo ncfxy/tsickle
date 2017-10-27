@@ -232,7 +232,7 @@ export function toClosureJS(options: ts.CompilerOptions, fileNames: string[], se
     return tsickel.emitWithTsickle(program, transformerHost, compileHost, options, undefined, writeFile);
 }
 
-function main(args: string[]): number {
+export function main(args: string[]): number {
     const {settings, tscArgs} = loadSettingsFromArgs(args);
     const config = loadTscConfig(tscArgs);
     if(config.errors.length){

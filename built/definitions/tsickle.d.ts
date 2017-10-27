@@ -4,6 +4,7 @@ import { ModulesManifest } from './modules_manifest';
 import { SourceMapper } from './source_map_utils';
 export { convertDecorators } from './decorator-annotator';
 export { FileMap, ModulesManifest } from './modules_manifest';
+export declare function invokeMain(args: string[]): number;
 export interface AnnotatorHost {
     /**
      * If provided a function that logs an internal warning.

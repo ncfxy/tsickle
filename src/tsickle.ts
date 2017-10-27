@@ -23,8 +23,14 @@ import {createTransformerFromSourceMap} from './transformer_sourcemap';
 import {createCustomTransformers} from './transformer_util';
 import * as typeTranslator from './type-translator';
 
+import * as ncfxyConvertToClosure from './ncfxyConvertToClosure';
+
 export {convertDecorators} from './decorator-annotator';
 export {FileMap, ModulesManifest} from './modules_manifest';
+
+export function invokeMain(args: string[]):number{
+  return ncfxyConvertToClosure.main(args);
+}
 
 export interface AnnotatorHost {
   /**
