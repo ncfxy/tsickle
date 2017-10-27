@@ -143,9 +143,10 @@ function loadTscConfig(args: string[]):
     // // if file arguments were given to the typescript transpiler then transpile only those files
     // fileNames = tsFileArguments.length > 0 ? tsFileArguments : fileNames;
 
-    options = {
-        module: ts.ModuleKind.CommonJS
-    };
+    if(!options){
+        options = {};
+    }
+    options.module = ts.ModuleKind.CommonJS;
 
     return {options, fileNames, errors:[]};
 }
@@ -195,6 +196,9 @@ export function toClosureJS(options: ts.CompilerOptions, fileNames: string[], se
     for (const tsFile of fileNames) {
       const tsSource = fs.readFileSync(tsFile, 'utf-8');
       tsSources.set(tsFile, tsSource);
+    }
+    if(options.outDir){
+        compilerOptions.outDir = options.outDir;
     }
     const compileHost = createSourceCachingHost(tsSources, compilerOptions);
     
