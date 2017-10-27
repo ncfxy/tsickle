@@ -16,8 +16,7 @@ const baseCompilerOptions: ts.CompilerOptions = {
     target: ts.ScriptTarget.ES2015,
     // Disable searching for @types typings. This prevents TS from looking
     // around for a node_modules directory.
-    types: ['node', 'myclosure', 'closure-library.ts'],
-    typeRoots: ["C:/Users/fan_x/Desktop/my-write-js-place/node_modules/@types"],
+    types: ['node', 'myclosure', 'my-google-closure-types.ts'],
     skipDefaultLibCheck: true,
     experimentalDecorators: true,
     module: ts.ModuleKind.CommonJS,
