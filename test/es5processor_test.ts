@@ -7,17 +7,24 @@
  */
 
 import {expect} from 'chai';
+import * as ts from 'typescript';
 
 import * as cliSupport from '../src/cli_support';
 import * as es5processor from '../src/es5processor';
 
+import * as testSupport from './test_support';
+
 describe('convertCommonJsToGoogModule', () => {
   function processES5(fileName: string, content: string, isES5 = true, prelude = '') {
+    const options = testSupport.compilerOptions;
+    const tsHost = ts.createCompilerHost(options);
     const host: es5processor.Es5ProcessorHost = {
       fileNameToModuleId: (fn) => fn,
       pathToModuleName: cliSupport.pathToModuleName,
       es5Mode: isES5,
       prelude,
+      options: testSupport.compilerOptions,
+      host: tsHost,
     };
     return es5processor.processES5(host, fileName, content);
   }
@@ -113,6 +120,12 @@ __export(require('req/mod'));`)
               `goog.module('a');var module = module || {id: 'a.js'};var mod = goog.require('req.mod');
 __export(mod);`);
     });
+
+    it('converts tslib exportStar usage', () => {
+      expectCommonJs('a.js', `tslib_1.__exportStar(require("./decorators"), exports);`)
+          .to.equal(
+              `goog.module('a');var module = module || {id: 'a.js'};var tsickle_module_0_ = goog.require('decorators');tslib_1.__exportStar(tsickle_module_0_, exports);`);
+    });
   });
 
   it('resolves relative module URIs', () => {
@@ -150,19 +163,31 @@ console.log(this.default);
 console.log(foo.bar.default);`);
   });
 
-  it('inserts the module after "use strict"', () => {
+  it('strips "use strict" (implied by goog.module)', () => {
     expectCommonJs(
         'a/b.js',
         `/**
-* docstring here
-*/
+ * docstring here
+ */
 "use strict";
 var foo = bar;
 `).to.equal(`goog.module('a.b');var module = module || {id: 'a/b.js'};/**
-* docstring here
-*/
+ * docstring here
+ */
 
 var foo = bar;
+`);
+  });
+
+  it('inserts goog.module after fileoverview comments', () => {
+    expectCommonJs('a/b.js', `/**
+ * @fileoverview comment here.
+ */
+var foo = bar;
+`).to.equal(`/**
+ * @fileoverview comment here.
+ */
+goog.module('a.b');var module = module || {id: 'a/b.js'};var foo = bar;
 `);
   });
 

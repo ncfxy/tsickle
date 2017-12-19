@@ -8,7 +8,6 @@
 
 import * as path from 'path';
 import {RawSourceMap, SourceMapConsumer, SourceMapGenerator} from 'source-map';
-import * as ts from 'typescript';
 
 import {classDecoratorDownlevelTransformer} from './class_decorator_downlevel_transformer';
 import * as decorator from './decorator-annotator';
@@ -17,13 +16,14 @@ import * as es5processor from './es5processor';
 import {transformFileoverviewComment} from './fileoverview_comment_transformer';
 import * as jsdoc from './jsdoc';
 import {ModulesManifest} from './modules_manifest';
-import {getIdentifierText, Rewriter, unescapeName} from './rewriter';
+import {getEntityNameText, getIdentifierText, Rewriter, unescapeName} from './rewriter';
 import {containsInlineSourceMap, extractInlineSourceMap, parseSourceMap, removeInlineSourceMap, setInlineSourceMap, SourceMapper, SourcePosition} from './source_map_utils';
 import {createTransformerFromSourceMap} from './transformer_sourcemap';
 import {createCustomTransformers} from './transformer_util';
 import * as typeTranslator from './type-translator';
+import * as ts from './typescript';
+import {hasModifierFlag, isDtsFileName} from './util';
 
-export {convertDecorators} from './decorator-annotator';
 export {FileMap, ModulesManifest} from './modules_manifest';
 
 export interface AnnotatorHost {
@@ -80,16 +80,12 @@ export let closureExternsBlacklist: string[] = [
   'WorkerGlobalScope',
 ];
 
-export function formatDiagnostics(diags: ts.Diagnostic[]): string {
+export function formatDiagnostics(diags: ReadonlyArray<ts.Diagnostic>): string {
   return diags
       .map((d) => {
         let res = ts.DiagnosticCategory[d.category];
         if (d.file) {
-          res += ' at ' + d.file.fileName + ':';
-          if (d.start) {
-            const {line, character} = d.file.getLineAndCharacterOfPosition(d.start);
-            res += (line + 1) + ':' + (character + 1) + ':';
-          }
+          res += ' at ' + formatLocation(d.file, d.start) + ':';
         }
         res += ' ' + ts.flattenDiagnosticMessageText(d.messageText, '\n');
         return res;
@@ -97,9 +93,14 @@ export function formatDiagnostics(diags: ts.Diagnostic[]): string {
       .join('\n');
 }
 
-/** @return true if node has the specified modifier flag set. */
-export function hasModifierFlag(node: ts.Node, flag: ts.ModifierFlags): boolean {
-  return (ts.getCombinedModifierFlags(node) & flag) !== 0;
+/** Returns a fileName:line:column string for the given position in the file. */
+export function formatLocation(sf: ts.SourceFile, start: number|undefined) {
+  let res = sf.fileName;
+  if (start !== undefined) {
+    const {line, character} = sf.getLineAndCharacterOfPosition(start);
+    res += ':' + (line + 1) + ':' + (character + 1);
+  }
+  return res;
 }
 
 /** @return true if node has the specified modifier flag set. */
@@ -129,10 +130,6 @@ function isValidClosurePropertyName(name: string): boolean {
   // In local experimentation, it appears that reserved words like 'var' and
   // 'if' are legal JS and still accepted by Closure.
   return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name);
-}
-
-export function isDtsFileName(fileName: string): boolean {
-  return /\.d\.ts$/.test(fileName);
 }
 
 /** Returns the Closure name of a function parameter, special-casing destructuring. */
@@ -178,7 +175,7 @@ interface NamedSymbol {
  * One Rewriter subclass manages .ts => .ts+Closure translation.
  * Another Rewriter subclass manages .ts => externs translation.
  */
-class ClosureRewriter extends Rewriter {
+abstract class ClosureRewriter extends Rewriter {
   /**
    * A mapping of aliases for symbols in the current file, used when emitting types.
    * TypeScript emits imported symbols with unpredictable prefixes. To generate correct type
@@ -193,6 +190,36 @@ class ClosureRewriter extends Rewriter {
       sourceMapper?: SourceMapper) {
     super(file, sourceMapper);
   }
+
+  /** Finds an exported (i.e. not global) declaration for the given symbol. */
+  protected findExportedDeclaration(sym: ts.Symbol): ts.Declaration|undefined {
+    // TODO(martinprobst): it's unclear when a symbol wouldn't have a declaration, maybe just for
+    // some builtins (e.g. Symbol)?
+    if (!sym.declarations || sym.declarations.length === 0) return undefined;
+    // A symbol declared in this file does not need to be imported.
+    if (sym.declarations.some(d => d.getSourceFile() === this.file)) return undefined;
+
+    // Find an exported declaration.
+    // Because tsickle runs with the --declaration flag, all types referenced from exported types
+    // must be exported, too, so there must either be some declaration that is exported, or the
+    // symbol is actually a global declaration (declared in a script file, not a module).
+    const decl = sym.declarations.find(d => {
+      // Check for Export | Default (default being a default export).
+      if (!hasModifierFlag(d, ts.ModifierFlags.ExportDefault)) return false;
+      // Exclude symbols declared in `declare global {...}` blocks, they are global and don't need
+      // imports.
+      let current: ts.Node|undefined = d;
+      while (current) {
+        if (current.flags & ts.NodeFlags.GlobalAugmentation) return false;
+        current = current.parent;
+      }
+      return true;
+    });
+    return decl;
+  }
+
+  /** Called to ensure that a symbol is declared in the current file's scope. */
+  protected abstract ensureSymbolDeclared(sym: ts.Symbol): void;
 
   /**
    * Get the ts.Symbol at a location or throw.
@@ -501,8 +528,10 @@ class ClosureRewriter extends Rewriter {
    * @param context The ts.Node containing the type reference; used for resolving symbols
    *     in context.
    * @param type The type to translate; if not provided, the Node's type will be used.
+   * @param resolveAlias If true, do not emit aliases as their symbol, but rather as the resolved
+   *     type underlying the alias. This should be true only when emitting the typedef itself.
    */
-  typeToClosure(context: ts.Node, type?: ts.Type): string {
+  typeToClosure(context: ts.Node, type?: ts.Type, resolveAlias?: boolean): string {
     if (this.host.untyped) {
       return '?';
     }
@@ -511,12 +540,13 @@ class ClosureRewriter extends Rewriter {
     if (!type) {
       type = typeChecker.getTypeAtLocation(context);
     }
-    return this.newTypeTranslator(context).translate(type);
+    return this.newTypeTranslator(context).translate(type, resolveAlias);
   }
 
   newTypeTranslator(context: ts.Node) {
     const translator = new typeTranslator.TypeTranslator(
-        this.typeChecker, context, this.host.typeBlackListPaths, this.symbolsToAliasedNames);
+        this.typeChecker, context, this.host.typeBlackListPaths, this.symbolsToAliasedNames,
+        (sym: ts.Symbol) => this.ensureSymbolDeclared(sym));
     translator.warn = msg => this.debugWarn(context, msg);
     return translator;
   }
@@ -546,9 +576,6 @@ class ClosureRewriter extends Rewriter {
 type HasTypeParameters =
     ts.InterfaceDeclaration|ts.ClassLikeDeclaration|ts.TypeAliasDeclaration|ts.SignatureDeclaration;
 
-// Matches common extensions of TypeScript input filenames
-const extension = /(\.ts|\.d\.ts|\.js|\.jsx|\.tsx)$/;
-
 const FILEOVERVIEW_COMMENTS: ReadonlySet<string> =
     new Set(['fileoverview', 'externs', 'modName', 'mods', 'pintomodule']);
 
@@ -564,16 +591,42 @@ class Annotator extends ClosureRewriter {
   private templateSpanStackCount = 0;
   private polymerBehaviorStackCount = 0;
 
+  /**
+   * The set of module symbols forward declared in the local namespace (with goog.forwarDeclare).
+   *
+   * Symbols not imported must be declared, which is done by adding forward declares to
+   * `extraImports` below.
+   */
+  private forwardDeclaredModules = new Set<ts.Symbol>();
+  private extraDeclares = '';
+
   constructor(
       typeChecker: ts.TypeChecker, file: ts.SourceFile, host: AnnotatorHost,
-      private tsHost?: ts.ModuleResolutionHost, private tsOpts?: ts.CompilerOptions,
+      private tsHost: ts.ModuleResolutionHost, private tsOpts: ts.CompilerOptions,
       sourceMapper?: SourceMapper) {
     super(typeChecker, file, host, sourceMapper);
   }
 
-  annotate() {
+  annotate(): {output: string, diagnostics: ts.Diagnostic[]} {
     this.visit(this.file);
-    return this.getOutput();
+    return this.getOutput(this.extraDeclares);
+  }
+
+  protected ensureSymbolDeclared(sym: ts.Symbol) {
+    const decl = this.findExportedDeclaration(sym);
+    if (!decl) return;
+
+    // Actually import the symbol.
+    const sf = decl.getSourceFile();
+    const moduleSymbol = this.typeChecker.getSymbolAtLocation(sf);
+    if (!moduleSymbol) {
+      return;  // A source file might not have a symbol if it's not a module (no ES6 im/exports).
+    }
+    // Already imported?
+    if (this.forwardDeclaredModules.has(moduleSymbol)) return;
+    // TODO(martinprobst): this should possibly use fileNameToModuleId.
+    const text = this.getForwardDeclareText(sf.fileName, moduleSymbol);
+    this.extraDeclares += text;
   }
 
   getExportDeclarationNames(node: ts.Node): ts.Identifier[] {
@@ -663,13 +716,25 @@ class Annotator extends ClosureRewriter {
         this.handleSourceFile(node as ts.SourceFile);
         return true;
       case ts.SyntaxKind.ImportDeclaration:
-        this.importedNames.push(
-            ...decorator.collectImportedNames(this.typeChecker, node as ts.ImportDeclaration));
-        return this.emitImportDeclaration(node as ts.ImportDeclaration);
+        const importDecl = node as ts.ImportDeclaration;
+        this.importedNames.push(...decorator.collectImportedNames(this.typeChecker, importDecl));
+        // No need to forward declare side effect imports.
+        if (!importDecl.importClause) break;
+        // Introduce a goog.forwardDeclare for the module, so that if TypeScript does not emit the
+        // module because it's only used in type positions, the JSDoc comments still reference a
+        // valid Closure level symbol.
+        const sym = this.typeChecker.getSymbolAtLocation(importDecl.moduleSpecifier);
+        // modules might not have a symbol if they are unused.
+        if (!sym) break;
+        // Write the export declaration here so that forward declares come after it, and
+        // fileoverview comments do not get moved behind statements.
+        this.writeNode(importDecl);
+        this.forwardDeclare(
+            importDecl.moduleSpecifier, /* default import? */ !!importDecl.importClause.name);
+        this.addSourceMapping(node);
+        return true;
       case ts.SyntaxKind.ExportDeclaration:
         const exportDecl = node as ts.ExportDeclaration;
-        this.writeLeadingTrivia(node);
-        this.emit('export');
         let exportedSymbols: NamedSymbol[] = [];
         if (!exportDecl.exportClause && exportDecl.moduleSpecifier) {
           // It's an "export * from ..." statement.
@@ -677,26 +742,32 @@ class Annotator extends ClosureRewriter {
           exportedSymbols = this.expandSymbolsFromExportStar(exportDecl);
           const exportSymbolsToEmit =
               exportedSymbols.filter(s => this.shouldEmitExportSymbol(s.sym));
-          this.emit(` {${exportSymbolsToEmit.map(e => unescapeName(e.name)).join(',')}}`);
+          this.writeLeadingTrivia(exportDecl);
+          // Only emit the export if any non-type symbols are exported; otherwise it is not needed,
+          // as type only exports are elided by TS anyway.
+          if (exportSymbolsToEmit.length) {
+            this.emit('export');
+            this.emit(` {${exportSymbolsToEmit.map(e => unescapeName(e.name)).join(',')}}`);
+            this.emit(' from ');
+            this.visit(exportDecl.moduleSpecifier!);
+            this.emit(';');
+            this.addSourceMapping(exportDecl);
+          }
         } else {
+          // Write the export declaration here so that forward declares come after it, and
+          // fileoverview comments do not get moved behind statements.
+          this.writeNode(exportDecl);
           if (exportDecl.exportClause) {
             exportedSymbols = this.getNamedSymbols(exportDecl.exportClause.elements);
-            this.visit(exportDecl.exportClause);
           }
         }
         if (exportDecl.moduleSpecifier) {
-          this.emit(` from '${this.resolveModuleSpecifier(exportDecl.moduleSpecifier)}';`);
-        } else {
-          // export {...};
-          this.emit(';');
-        }
-        this.addSourceMapping(node);
-        if (exportDecl.moduleSpecifier) {
-          this.forwardDeclare(exportDecl.moduleSpecifier, exportedSymbols);
+          this.forwardDeclare(exportDecl.moduleSpecifier);
         }
         if (exportedSymbols.length) {
           this.emitTypeDefExports(exportedSymbols);
         }
+        this.addSourceMapping(node);
         return true;
       case ts.SyntaxKind.InterfaceDeclaration:
         this.emitInterface(node as ts.InterfaceDeclaration);
@@ -759,6 +830,8 @@ class Annotator extends ClosureRewriter {
         }
 
         this.emitFunctionType([fnDecl], tags);
+        this.newTypeTranslator(fnDecl).blacklistTypeParameters(
+            this.symbolsToAliasedNames, fnDecl.typeParameters);
         this.writeNodeFrom(fnDecl, fnDecl.getStart());
         return true;
       case ts.SyntaxKind.TypeAliasDeclaration:
@@ -990,12 +1063,17 @@ class Annotator extends ClosureRewriter {
     const reexports = new Set<ts.Symbol>();
     for (const sym of exports) {
       const name = unescapeName(sym.name);
-      if (moduleExports.has(name)) {
-        // This name is shadowed by a local definition, such as:
-        // - export var foo ...
-        // - export {foo} from ...
-        // - export {bar as foo} from ...
-        continue;
+      if (moduleExports instanceof Map) {
+        if (moduleExports.has(name)) {
+          // This name is shadowed by a local definition, such as:
+          // - export var foo ...
+          // - export {foo} from ...
+          // - export {bar as foo} from ...
+          continue;
+        }
+      } else {
+        // TODO(#634): check if this is a safe cast.
+        if (moduleExports.has(name as ts.__String)) continue;
       }
       if (this.generatedExports.has(name)) {
         // Already exported via an earlier expansion of an "export * from ...".
@@ -1031,111 +1109,12 @@ class Annotator extends ClosureRewriter {
               (exp.sym.flags & ts.SymbolFlags.Value) === 0;
       if (!isTypeAlias) continue;
       const typeName = this.symbolsToAliasedNames.get(exp.sym) || exp.sym.name;
-      this.emit(`\n/** @typedef {${typeName}} */\nexports.${exp.name}; // re-export typedef`);
+      this.emit(`/** @typedef {${typeName}} */\nexports.${exp.name}; // re-export typedef\n`);
     }
   }
 
-  /**
-   * Convert from implicit `import {} from 'pkg'` to `import {} from 'pkg/index'.
-   * TypeScript supports the shorthand, but not all ES6 module loaders do.
-   * Workaround for https://github.com/Microsoft/TypeScript/issues/12597
-   */
-  private resolveModuleSpecifier(moduleSpecifier: ts.Expression): string {
-    if (moduleSpecifier.kind !== ts.SyntaxKind.StringLiteral) {
-      throw new Error(`unhandled moduleSpecifier kind: ${ts.SyntaxKind[moduleSpecifier.kind]}`);
-    }
-    let moduleId = (moduleSpecifier as ts.StringLiteral).text;
-    if (this.host.convertIndexImportShorthand) {
-      if (!this.tsOpts || !this.tsHost) {
-        throw new Error(
-            'option convertIndexImportShorthand requires that annotate be called with a TypeScript host and options.');
-      }
-      const resolved = ts.resolveModuleName(moduleId, this.file.fileName, this.tsOpts, this.tsHost);
-      if (resolved && resolved.resolvedModule) {
-        const requestedModule = moduleId.replace(extension, '');
-        const resolvedModule = resolved.resolvedModule.resolvedFileName.replace(extension, '');
-        if (resolvedModule.indexOf('node_modules') === -1 &&
-            requestedModule.substr(requestedModule.lastIndexOf('/')) !==
-                resolvedModule.substr(resolvedModule.lastIndexOf('/'))) {
-          moduleId = './' +
-              path.relative(path.dirname(this.file.fileName), resolvedModule)
-                  .replace(path.sep, '/');
-        }
-      }
-    }
-    return moduleId;
-  }
-
-  /**
-   * Handles emit of an "import ..." statement.
-   * We need to do a bit of rewriting so that imported types show up under the
-   * correct name in JSDoc.
-   * @return true if the decl was handled, false to allow default processing.
-   */
-  private emitImportDeclaration(decl: ts.ImportDeclaration): boolean {
-    this.writeLeadingTrivia(decl);
-    this.emit('import');
-    const importPath = this.resolveModuleSpecifier(decl.moduleSpecifier);
-    const importClause = decl.importClause;
-    if (!importClause) {
-      // import './foo';
-      this.emit(`'${importPath}';`);
-      this.addSourceMapping(decl);
-      return true;
-    } else if (
-        importClause.name ||
-        (importClause.namedBindings &&
-         importClause.namedBindings.kind === ts.SyntaxKind.NamedImports)) {
-      this.visit(importClause);
-      this.emit(` from '${importPath}';`);
-      this.addSourceMapping(decl);
-
-      // importClause.name implies
-      //   import a from ...;
-      // namedBindings being NamedImports implies
-      //   import {a as b} from ...;
-      //
-      // Both of these forms create a local name "a", which after TypeScript CommonJS compilation
-      // will become some renamed variable like "module_1.default" or "module_1.a" (for default vs
-      // named bindings, respectively).
-      // tsickle references types in JSDoc. Because the module prefixes are not predictable, and
-      // because TypeScript might remove imports entirely if they are only for types, the code below
-      // inserts an artificial `const prefix = goog.require` call for the module, and then registers
-      // all symbols from this import to be prefixed.
-      if (!this.host.untyped) {
-        let symbols: NamedSymbol[] = [];
-        if (importClause.name) {
-          // import a from ...;
-          symbols = [{
-            name: getIdentifierText(importClause.name),
-            sym: this.mustGetSymbolAtLocation(importClause.name),
-          }];
-        } else {
-          // import {a as b} from ...;
-          if (!importClause.namedBindings ||
-              importClause.namedBindings.kind !== ts.SyntaxKind.NamedImports) {
-            throw new Error('unreached');  // Guaranteed by if check above.
-          }
-          symbols = this.getNamedSymbols(importClause.namedBindings.elements);
-        }
-        this.forwardDeclare(decl.moduleSpecifier, symbols, !!importClause.name);
-      }
-      return true;
-    } else if (
-        importClause.namedBindings &&
-        importClause.namedBindings.kind === ts.SyntaxKind.NamespaceImport) {
-      // import * as foo from ...;
-      this.visit(importClause);
-      this.emit(` from '${importPath}';`);
-      this.addSourceMapping(decl);
-      return true;
-    } else {
-      this.errorUnimplementedKind(decl, 'unexpected kind of import');
-      return false;  // Use default processing.
-    }
-  }
-
-  private getNamedSymbols(specifiers: Array<ts.ImportSpecifier|ts.ExportSpecifier>): NamedSymbol[] {
+  private getNamedSymbols(specifiers: ReadonlyArray<ts.ImportSpecifier|ts.ExportSpecifier>):
+      NamedSymbol[] {
     return specifiers.map(e => {
       return {
         // e.name might be renaming symbol as in `export {Foo as Bar}`, where e.name would be 'Bar'
@@ -1152,29 +1131,48 @@ class Annotator extends ClosureRewriter {
    * Emits a `goog.forwardDeclare` alias for each symbol from the given list.
    * @param specifier the import specifier, i.e. module path ("from '...'").
    */
-  private forwardDeclare(
-      specifier: ts.Expression, exportedSymbols: NamedSymbol[], isDefaultImport = false) {
-    if (this.host.untyped) return;
-    const importPath = this.resolveModuleSpecifier(specifier);
+  private forwardDeclare(specifier: ts.Expression, isDefaultImport = false) {
+    const importPath = es5processor.resolveIndexShorthand(
+        {options: this.tsOpts, host: this.tsHost}, this.file.fileName,
+        (specifier as ts.StringLiteral).text);
+    const moduleSymbol = this.typeChecker.getSymbolAtLocation(specifier);
+    this.emit(this.getForwardDeclareText(importPath, moduleSymbol, isDefaultImport));
+  }
+
+  /**
+   * Returns the `const x = goog.forwardDeclare...` text for an import of the given `importPath`.
+   * This also registers aliases for symbols from the module that map to this forward declare.
+   */
+  private getForwardDeclareText(
+      importPath: string, moduleSymbol: ts.Symbol|undefined, isDefaultImport = false): string {
+    if (this.host.untyped) return '';
     const nsImport = es5processor.extractGoogNamespaceImport(importPath);
     const forwardDeclarePrefix = `tsickle_forward_declare_${++this.forwardDeclareCounter}`;
     const moduleNamespace =
         nsImport !== null ? nsImport : this.host.pathToModuleName(this.file.fileName, importPath);
-    const moduleSymbol = this.typeChecker.getSymbolAtLocation(specifier);
-    // Scripts do not have a symbol. Scripts can still be imported, either as side effect imports or
-    // with an empty import set ("{}"). TypeScript does not emit a runtime load for an import with
-    // an empty list of symbols, but the import forces any global declarations from the library to
-    // be visible, which is what users use this for. No symbols from the script need forward
-    // declaration, so just return.
-    if (!moduleSymbol) return;
-    const exports = this.typeChecker.getExportsOfModule(moduleSymbol);
     // In TypeScript, importing a module for use in a type annotation does not cause a runtime load.
     // In Closure Compiler, goog.require'ing a module causes a runtime load, so emitting requires
     // here would cause a change in load order, which is observable (and can lead to errors).
     // Instead, goog.forwardDeclare types, which allows using them in type annotations without
     // causing a load. See below for the exception to the rule.
-    this.emit(`\nconst ${forwardDeclarePrefix} = goog.forwardDeclare("${moduleNamespace}");`);
-    const hasValues = exports.some(e => (e.flags & ts.SymbolFlags.Value) !== 0);
+    let emitText = `const ${forwardDeclarePrefix} = goog.forwardDeclare("${moduleNamespace}");\n`;
+
+    // Scripts do not have a symbol. Scripts can still be imported, either as side effect imports or
+    // with an empty import set ("{}"). TypeScript does not emit a runtime load for an import with
+    // an empty list of symbols, but the import forces any global declarations from the library to
+    // be visible, which is what users use this for. No symbols from the script need forward
+    // declaration, so just return.
+    if (!moduleSymbol) return '';
+    this.forwardDeclaredModules.add(moduleSymbol);
+    const exports = this.typeChecker.getExportsOfModule(moduleSymbol);
+    const hasValues = exports.some(e => {
+      const isValue = (e.flags & ts.SymbolFlags.Value) !== 0;
+      const isConstEnum = (e.flags & ts.SymbolFlags.ConstEnum) !== 0;
+      // const enums are inlined by TypeScript (if preserveConstEnums=false), so there is never a
+      // value import generated for them. That means for the purpose of force-importing modules,
+      // they do not count as values. If preserveConstEnums=true, this shouldn't hurt.
+      return isValue && !isConstEnum;
+    });
     if (!hasValues) {
       // Closure Compiler's toolchain will drop files that are never goog.require'd *before* type
       // checking (e.g. when using --closure_entry_point or similar tools). This causes errors
@@ -1186,16 +1184,18 @@ class Annotator extends ClosureRewriter {
       // This is a heuristic - if the module exports some values, but those are never imported,
       // the file will still end up not being imported. Hopefully modules that export values are
       // imported for their value in some place.
-      this.emit(`\ngoog.require("${moduleNamespace}"); // force type-only module to be loaded`);
+      emitText += `goog.require("${moduleNamespace}"); // force type-only module to be loaded\n`;
     }
-    for (const exp of exportedSymbols) {
-      if (exp.sym.flags & ts.SymbolFlags.Alias)
-        exp.sym = this.typeChecker.getAliasedSymbol(exp.sym);
+    for (let sym of exports) {
+      if (sym.flags & ts.SymbolFlags.Alias) {
+        sym = this.typeChecker.getAliasedSymbol(sym);
+      }
       // goog: imports don't actually use the .default property that TS thinks they have.
       const qualifiedName = nsImport && isDefaultImport ? forwardDeclarePrefix :
-                                                          forwardDeclarePrefix + '.' + exp.sym.name;
-      this.symbolsToAliasedNames.set(exp.sym, qualifiedName);
+                                                          forwardDeclarePrefix + '.' + sym.name;
+      this.symbolsToAliasedNames.set(sym, qualifiedName);
     }
+    return emitText;
   }
 
   private visitClassDeclaration(classDecl: ts.ClassDeclaration) {
@@ -1394,7 +1394,11 @@ class Annotator extends ClosureRewriter {
     // TypeScript drops exports that are never assigned to (and Closure
     // requires us to not assign to typedef exports).  Instead, emit the
     // "exports.foo;" line directly in that case.
-    this.emit(`\n/** @typedef {${this.typeToClosure(node)}} */\n`);
+    this.newTypeTranslator(node).blacklistTypeParameters(
+        this.symbolsToAliasedNames, node.typeParameters);
+
+    const typeStr = this.typeToClosure(node, undefined, true /* resolveAlias */);
+    this.emit(`\n/** @typedef {${typeStr}} */\n`);
     if (hasModifierFlag(node, ts.ModifierFlags.Export)) {
       this.emit('exports.');
     } else {
@@ -1432,7 +1436,7 @@ class Annotator extends ClosureRewriter {
       }
     }
     if (hasNumber && hasString) {
-      return 'number|string';
+      return '?';  // Closure's new type inference doesn't support enums of unions.
     } else if (hasNumber) {
       return 'number';
     } else if (hasString) {
@@ -1529,6 +1533,15 @@ class ExternsWriter extends ClosureRewriter {
     return this.getOutput();
   }
 
+  protected ensureSymbolDeclared(sym: ts.Symbol): void {
+    const decl = this.findExportedDeclaration(sym);
+    if (!decl) return;  // symbol does not need declaring.
+    this.error(
+        this.file,
+        `Cannot reference a non-global symbol from an externs: ${sym.name} declared at ${
+            formatLocation(decl.getSourceFile(), decl.getStart())}`);
+  }
+
   newTypeTranslator(context: ts.Node) {
     const tt = super.newTypeTranslator(context);
     tt.isForExterns = true;
@@ -1606,6 +1619,22 @@ class ExternsWriter extends ClosureRewriter {
         for (const stmt of block.statements) {
           this.visit(stmt, namespace);
         }
+        break;
+      case ts.SyntaxKind.ImportEqualsDeclaration:
+        const importEquals = node as ts.ImportEqualsDeclaration;
+        const localName = getIdentifierText(importEquals.name);
+        if (localName === 'ng') {
+          this.emit(`\n/* Skipping problematic import ng = ...; */\n`);
+          break;
+        }
+        if (importEquals.moduleReference.kind === ts.SyntaxKind.ExternalModuleReference) {
+          this.emit(`\n/* TODO: import ${localName} = require(...) */\n`);
+          break;
+        }
+        const qn = getEntityNameText(importEquals.moduleReference);
+        // @const so that Closure Compiler understands this is an alias.
+        if (namespace.length === 0) this.emit('/** @const */\n');
+        this.writeExternsVariable(localName, namespace, qn);
         break;
       case ts.SyntaxKind.ClassDeclaration:
       case ts.SyntaxKind.InterfaceDeclaration:
@@ -1825,7 +1854,8 @@ class ExternsWriter extends ClosureRewriter {
   }
 
   private writeExternsTypeAlias(decl: ts.TypeAliasDeclaration, namespace: string[]) {
-    this.emit(`\n/** @typedef {${this.typeToClosure(decl)}} */\n`);
+    const typeStr = this.typeToClosure(decl, undefined, true /* resolveAlias */);
+    this.emit(`\n/** @typedef {${typeStr}} */\n`);
     this.writeExternsVariable(getIdentifierText(decl.name), namespace);
   }
 }
@@ -1844,7 +1874,7 @@ function isPolymerBehaviorPropertyInCallExpression(pa: ts.PropertyAssignment): b
 
 export function annotate(
     typeChecker: ts.TypeChecker, file: ts.SourceFile, host: AnnotatorHost,
-    tsHost?: ts.ModuleResolutionHost, tsOpts?: ts.CompilerOptions,
+    tsHost: ts.ModuleResolutionHost, tsOpts: ts.CompilerOptions,
     sourceMapper?: SourceMapper): {output: string, diagnostics: ts.Diagnostic[]} {
   return new Annotator(typeChecker, file, host, tsHost, tsOpts, sourceMapper).annotate();
 }
@@ -1873,6 +1903,11 @@ export interface TsickleHost extends es5processor.Es5ProcessorHost, AnnotatorHos
    * Whether to convers types to closure
    */
   transformTypesToClosure?: boolean;
+  /**
+   * Whether to add aliases to the .d.ts files to add the exports to the
+   * ಠ_ಠ.clutz namespace.
+   */
+  addDtsClutzAliases?: boolean;
   /**
    * If true, tsickle and decorator downlevel processing will be skipped for
    * that file.
@@ -1966,7 +2001,7 @@ export function emitWithTsickle(
   const modulesManifest = new ModulesManifest();
   const writeFileImpl =
       (fileName: string, content: string, writeByteOrderMark: boolean,
-       onError?: (message: string) => void, sourceFiles?: ts.SourceFile[]) => {
+       onError?: (message: string) => void, sourceFiles?: ReadonlyArray<ts.SourceFile>) => {
         if (path.extname(fileName) !== '.map') {
           if (tsOptions.inlineSourceMap) {
             content = combineInlineSourceMaps(program, fileName, content);
@@ -1977,6 +2012,9 @@ export function emitWithTsickle(
               host, modulesManifest, fileName, content);
         } else {
           content = combineSourceMaps(program, fileName, content);
+        }
+        if (host.addDtsClutzAliases && isDtsFileName(fileName) && sourceFiles) {
+          content = addClutzAliases(fileName, content, sourceFiles, typeChecker, host);
         }
         writeFileDelegate(fileName, content, writeByteOrderMark, onError, sourceFiles);
       };
@@ -2015,6 +2053,180 @@ export function emitWithTsickle(
     diagnostics: [...tsDiagnostics, ...tsickleDiagnostics],
     externs
   };
+}
+
+function areAnyDeclarationsFromSourceFile(
+    declarations: ts.Declaration[], sourceFile: ts.SourceFile) {
+  for (const decl of declarations) {
+    if (decl.getSourceFile() === sourceFile) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function addToMultiMap<T, U>(map: Map<T, U[]>, key: T, value: U) {
+  const array = map.get(key);
+  if (array) {
+    array.push(value);
+  } else {
+    map.set(key, [value]);
+  }
+}
+
+/**
+ * A tsickle produced declaration file might be consumed be referenced by Clutz
+ * produced .d.ts files, which use symbol names based on Closure's internal
+ * naming conventions, so we need to provide aliases for all the exported symbols
+ * in the Clutz naming convention.
+ */
+function addClutzAliases(
+    fileName: string, dtsFileContent: string, sourceFiles: ReadonlyArray<ts.SourceFile>,
+    typeChecker: ts.TypeChecker, host: TsickleHost): string {
+  const reexportsByNamespace: Map<string, string[]> = new Map();
+  for (const sf of sourceFiles) {
+    const moduleSymbol = typeChecker.getSymbolAtLocation(sf);
+    const moduleExports = moduleSymbol && typeChecker.getExportsOfModule(moduleSymbol);
+
+    if (!moduleExports) {
+      return dtsFileContent;
+    }
+
+    // pathToModuleName expects the file name to end in .js
+    const jsFileName = fileName.replace('.d.ts', '.js');
+    const moduleName = host.pathToModuleName('', jsFileName);
+    const clutzModuleName = moduleName.replace(/\./g, '$');
+
+    // moduleExports is a ts.Map<ts.Symbol> which is an es6 Map, but has a
+    // different type for no reason
+    for (const symbol of moduleExports) {
+      // We only want to add clutz aliases in the file the symbol was originally
+      // exported from, not in any files where the symbol was reexported, since
+      // the alias will refer to a symbol that might not be present in the reexporting
+      // file.  If there are no declarations, be conservative and emit the aliases.
+      const declarations = symbol.getDeclarations();
+      if (declarations && !areAnyDeclarationsFromSourceFile(declarations, sf)) {
+        continue;
+      }
+      // Want to alias the symbol to match what clutz would produce, so clutz .d.ts's
+      // can reference symbols from typescript .d.ts's. See examples at:
+      // https://github.com/angular/clutz/tree/master/src/test/java/com/google/javascript/clutz
+      // The first symbol name is that currently produced by clutz, and the second
+      // is what incremental clutz will produce.
+      const reexports = [];
+      reexports.push({
+        namespace: 'ಠ_ಠ.clutz',
+        clutzSymbolName: `module$contents$${clutzModuleName}_${symbol.name}`,
+        aliasedSymbolName: symbol.name
+      });
+      reexports.push({
+        namespace: 'ಠ_ಠ.clutz.module$exports$' + clutzModuleName,
+        clutzSymbolName: symbol.name,
+        aliasedSymbolName: `module$contents$${clutzModuleName}_${symbol.name}`
+      });
+      const {params, paramsWithContraint} = getGenericTypeParameters(symbol);
+
+      if (symbol.flags & ts.SymbolFlags.Class) {
+        // classes need special care to match clutz, which seperates class types into a
+        // type for the static properties and a type for the instance properties
+        reexports.push({
+          namespace: 'ಠ_ಠ.clutz',
+          clutzSymbolName: `module$contents$${clutzModuleName}_${symbol.name}_Instance`,
+          aliasedSymbolName: symbol.name
+        });
+        reexports.push({
+          namespace: 'ಠ_ಠ.clutz.module$exports$' + clutzModuleName,
+          clutzSymbolName: symbol.name + '_Instance',
+          aliasedSymbolName: `module$contents$${clutzModuleName}_${symbol.name}`
+        });
+      }
+
+      if (symbol.flags & ts.SymbolFlags.Type || symbol.flags & ts.SymbolFlags.Class) {
+        for (const {namespace, clutzSymbolName, aliasedSymbolName} of reexports) {
+          addToMultiMap(
+              reexportsByNamespace, namespace,
+              `type ${clutzSymbolName}${paramsWithContraint} = ${aliasedSymbolName}${params};`);
+        }
+      }
+      if (symbol.flags & ts.SymbolFlags.Value || symbol.flags & ts.SymbolFlags.Class) {
+        for (const {namespace, clutzSymbolName, aliasedSymbolName} of reexports) {
+          addToMultiMap(
+              reexportsByNamespace, namespace,
+              `const ${clutzSymbolName}: typeof ${aliasedSymbolName};`);
+        }
+      }
+    }
+  }
+
+  if (reexportsByNamespace.size) {
+    dtsFileContent += 'declare global {\n';
+    for (const [namespace, rexps] of reexportsByNamespace) {
+      dtsFileContent += `\tnamespace ${namespace} {\n`;
+      for (const rexp of rexps) {
+        dtsFileContent += `\t\t${rexp}\n`;
+      }
+      dtsFileContent += '\t}\n';
+    }
+    dtsFileContent += '}\n';
+  }
+
+  return dtsFileContent;
+}
+
+/**
+ * Returns 2 strings specifying the generic type arguments for the symbol.  The constrained params
+ * include any `T extends foo` arguments, the regular params are just a list of the type symbols,
+ * since we need the constraints on the LHS of the alias declaration, but can't have them on the
+ * RHS.
+ */
+function getGenericTypeParameters(symbol: ts.Symbol):
+    {params: string, paramsWithContraint: string} {
+  if (!symbol.declarations) {
+    return {params: '', paramsWithContraint: ''};
+  }
+
+  // All declarations have to have matching generic types, so we're safe just looking at
+  // the first one.
+  if (!symbol.declarations[0]) {
+    return {params: '', paramsWithContraint: ''};
+  }
+
+  const declaration = symbol.declarations[0];
+
+  if ([
+        ts.SyntaxKind.FunctionDeclaration, ts.SyntaxKind.ConstructorKeyword,
+        ts.SyntaxKind.ClassDeclaration, ts.SyntaxKind.InterfaceDeclaration,
+        ts.SyntaxKind.TypeAliasDeclaration
+      ].indexOf(declaration.kind) === -1) {
+    return {params: '', paramsWithContraint: ''};
+  }
+
+  const declarationWithTypeParameters: ts.DeclarationWithTypeParameters =
+      declaration as ts.DeclarationWithTypeParameters;
+
+  if (!declarationWithTypeParameters.typeParameters) {
+    return {params: '', paramsWithContraint: ''};
+  }
+
+  const paramList: string[] = [];
+  const constrainedParamList: string[] = [];
+  for (const param of declarationWithTypeParameters.typeParameters) {
+    let constrainedParam = param.name.getText();
+    if (param.constraint) {
+      constrainedParam += ` extends ${param.constraint.getText()}`;
+    }
+    if (param.default) {
+      constrainedParam += ` = ${param.default.getText()}`;
+    }
+    constrainedParamList.push(constrainedParam);
+    paramList.push(param.name.getText());
+  }
+
+  const params = `<${paramList.join(',')}>`;
+  const paramsWithContraint = `<${constrainedParamList.join(',')}>`;
+
+  return {params, paramsWithContraint};
 }
 
 function skipTransformForSourceFileIfNeeded(

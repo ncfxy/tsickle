@@ -20,7 +20,7 @@ import {sourceMapTextToConsumer} from '../src/source_map_utils';
 import * as tsickle from '../src/tsickle';
 
 /** Base compiler options to be customized and exposed. */
-const baseCompilerOptions: ts.CompilerOptions = {
+export const baseCompilerOptions: ts.CompilerOptions = {
   target: ts.ScriptTarget.ES2015,
   // Disable searching for @types typings. This prevents TS from looking
   // around for a node_modules directory.
@@ -101,7 +101,7 @@ export function createSourceCachingHost(
   const host = ts.createCompilerHost(tsCompilerOptions);
 
   host.getSourceFile = (fileName: string, languageVersion: ts.ScriptTarget,
-                        onError?: (msg: string) => void): ts.SourceFile => {
+                        onError?: (msg: string) => void): ts.SourceFile|undefined => {
     // Normalize path to fix wrong directory separators on Windows which
     // would break the equality check.
     fileName = path.normalize(fileName);
@@ -120,6 +120,12 @@ export function createSourceCachingHost(
     if (sources.has(fileName)) {
       return true;
     }
+    // Typescript occasionally needs to look on disk for files we don't pass into
+    // the program as a source (eg to resolve a module that's in node_modules),
+    // but only .ts files explicitly passed in should be findable
+    if (/\.ts$/.test(fileName)) {
+      return false;
+    }
     return originalFileExists.call(host, fileName);
   };
 
@@ -133,24 +139,6 @@ export function createProgramAndHost(
 
   const program = ts.createProgram(Array.from(sources.keys()), tsCompilerOptions, host);
   return {program, host};
-}
-
-/** Emits transpiled output with tsickle postprocessing.  Throws an exception on errors. */
-export function emit(program: ts.Program): {[fileName: string]: string} {
-  const transformed: {[fileName: string]: string} = {};
-  const {diagnostics} = program.emit(undefined, (fileName: string, data: string) => {
-    const host: es5processor.Es5ProcessorHost = {
-      fileNameToModuleId: (fn) => fn.replace(/^\.\//, ''),
-      pathToModuleName: cliSupport.pathToModuleName,
-      es5Mode: true,
-      prelude: '',
-    };
-    transformed[fileName] = es5processor.processES5(host, fileName, data).output;
-  });
-  if (diagnostics.length > 0) {
-    throw new Error(tsickle.formatDiagnostics(diagnostics));
-  }
-  return transformed;
 }
 
 export class GoldenFileTest {
@@ -173,13 +161,37 @@ export class GoldenFileTest {
         .map(f => path.join(this.path, GoldenFileTest.tsPathToJs(f)));
   }
 
+  get isDeclarationTest(): boolean {
+    return /\.declaration\b/.test(this.name);
+  }
+
+  get isUntypedTest(): boolean {
+    return /\.untyped\b/.test(this.name);
+  }
+
+  /**
+   * Find the absolute path to the tsickle root directory by reading the
+   * symlink bazel puts into bazel-bin back into the test_files directory
+   * and chopping off the test_files portion.
+   */
+  getWorkspaceRoot(): string {
+    if (!this.tsFiles.length || !this.tsFiles[0]) {
+      throw new Error(
+          'The workspace root was requested, but there were no source files to follow symlinks for.');
+    }
+    const resolvedFileSymLink = fs.readlinkSync(path.join(this.path, this.tsFiles[0]));
+    const resolvedPathParts = resolvedFileSymLink.split(path.sep);
+    const testFilesSegmentIndex = resolvedPathParts.findIndex(s => s === 'test_files');
+    return path.join(path.sep, ...resolvedPathParts.slice(0, testFilesSegmentIndex));
+  }
+
   public static tsPathToJs(tsPath: string): string {
     return tsPath.replace(/\.tsx?$/, '.js');
   }
 }
 
 export function goldenTests(): GoldenFileTest[] {
-  const basePath = path.join(__dirname, '..', '..', 'test_files');
+  const basePath = path.join(process.env['RUNFILES'], 'tsickle', 'test_files');
   const testNames = fs.readdirSync(basePath);
 
   const testDirs = testNames.map(testName => path.join(basePath, testName))
@@ -288,9 +300,12 @@ export function compileWithTransfromer(
     fileNameToModuleId: (filePath) => filePath,
     transformDecorators: true,
     transformTypesToClosure: true,
+    addDtsClutzAliases: true,
     googmodule: true,
     es5Mode: false,
     untyped: false,
+    options: compilerOptions,
+    host: tsHost,
   };
 
   const files = new Map<string, string>();

@@ -8,6 +8,7 @@
 
 import * as path from 'path';
 import * as ts from 'typescript';
+import {getIdentifierText} from './rewriter';
 
 /**
  * Determines if fileName refers to a builtin lib.d.ts file.
@@ -30,6 +31,13 @@ function isClosureProvidedType(symbol: ts.Symbol): boolean {
 
 export function typeToDebugString(type: ts.Type): string {
   let debugString = `flags:0x${type.flags.toString(16)}`;
+
+  if (type.aliasSymbol) {
+    debugString += ` alias:${symbolToDebugString(type.aliasSymbol)}`;
+  }
+  if (type.aliasTypeArguments) {
+    debugString += ` aliasArgs:<${type.aliasTypeArguments.map(typeToDebugString).join(',')}>`;
+  }
 
   // Just the unique flags (powers of two). Declared in src/compiler/types.ts.
   const basicTypes: ts.TypeFlags[] = [
@@ -106,8 +114,6 @@ export function symbolToDebugString(sym: ts.Symbol): string {
     ts.SymbolFlags.TypeParameter,
     ts.SymbolFlags.TypeAlias,
     ts.SymbolFlags.ExportValue,
-    ts.SymbolFlags.ExportType,
-    ts.SymbolFlags.ExportNamespace,
     ts.SymbolFlags.Alias,
     ts.SymbolFlags.Prototype,
     ts.SymbolFlags.ExportStar,
@@ -126,10 +132,10 @@ export function symbolToDebugString(sym: ts.Symbol): string {
 /** TypeTranslator translates TypeScript types to Closure types. */
 export class TypeTranslator {
   /**
-   * A list of types we've encountered while emitting; used to avoid getting stuck in recursive
-   * types.
+   * A list of type literals we've encountered while emitting; used to avoid getting stuck in
+   * recursive types.
    */
-  private readonly seenTypes: ts.Type[] = [];
+  private readonly seenTypeLiterals = new Set<ts.Type>();
 
   /**
    * Whether to write types suitable for an \@externs file. Externs types must not refer to
@@ -143,13 +149,15 @@ export class TypeTranslator {
    * @param pathBlackList is a set of paths that should never get typed;
    *     any reference to symbols defined in these paths should by typed
    *     as {?}.
-   * @param symbolsToPrefix a mapping from symbols (`Foo`) to a prefix they should be emitted with
-   *     (`tsickle_import.Foo`).
+   * @param symbolsToAliasedNames a mapping from symbols (`Foo`) to a name in scope they should be
+   *     emitted as (e.g. `tsickle_forward_declare_1.Foo`). Can be augmented during type
+   *     translation, e.g. to blacklist a symbol.
    */
   constructor(
       private readonly typeChecker: ts.TypeChecker, private readonly node: ts.Node,
       private readonly pathBlackList?: Set<string>,
-      private readonly symbolsToAliasedNames = new Map<ts.Symbol, string>()) {
+      private readonly symbolsToAliasedNames = new Map<ts.Symbol, string>(),
+      private readonly ensureSymbolDeclared: (sym: ts.Symbol) => void = () => {}) {
     // Normalize paths to not break checks on Windows.
     if (this.pathBlackList != null) {
       this.pathBlackList =
@@ -168,14 +176,6 @@ export class TypeTranslator {
    *     would be fully qualified. I.e. this flag is false for generic types.
    */
   public symbolToString(sym: ts.Symbol, useFqn: boolean): string {
-    // This follows getSingleLineStringWriter in the TypeScript compiler.
-    let str = '';
-    let symAlias = sym;
-    if (symAlias.flags & ts.SymbolFlags.Alias) {
-      symAlias = this.typeChecker.getAliasedSymbol(symAlias);
-    }
-    const alias = this.symbolsToAliasedNames.get(symAlias);
-    if (alias) return alias;
     if (useFqn && this.isForExterns) {
       // For regular type emit, we can use TypeScript's naming rules, as they match Closure's name
       // scoping rules. However when emitting externs files for ambients, naming rules change. As
@@ -209,6 +209,20 @@ export class TypeTranslator {
       }
       return this.stripClutzNamespace(fqn);
     }
+    // TypeScript resolves e.g. union types to their members, which can include symbols not declared
+    // in the current scope. Ensure that all symbols found this way are actually declared.
+    // This must happen before the alias check below, it might introduce a new alias for the symbol.
+    if ((sym.flags & ts.SymbolFlags.TypeParameter) === 0) this.ensureSymbolDeclared(sym);
+
+    let symAlias = sym;
+    if (symAlias.flags & ts.SymbolFlags.Alias) {
+      symAlias = this.typeChecker.getAliasedSymbol(symAlias);
+    }
+    const alias = this.symbolsToAliasedNames.get(symAlias);
+    if (alias) return alias;
+
+    // This follows getSingleLineStringWriter in the TypeScript compiler.
+    let str = '';
     const writeText = (text: string) => str += text;
     const doNothing = () => {
       return;
@@ -248,7 +262,7 @@ export class TypeTranslator {
     return name;
   }
 
-  translate(type: ts.Type): string {
+  translate(type: ts.Type, resolveAlias = false): string {
     // NOTE: Though type.flags has the name "flags", it usually can only be one
     // of the enum options at a time (except for unions of literal types, e.g. unions of boolean
     // values, string values, enum values). This switch handles all the cases in the ts.TypeFlags
@@ -261,6 +275,17 @@ export class TypeTranslator {
 
     // NonPrimitive occurs on its own on the lower case "object" type. Special case to "!Object".
     if (type.flags === ts.TypeFlags.NonPrimitive) return '!Object';
+
+    // Avoid infinite loops on recursive type literals.
+    // It would be nice to just emit the name of the recursive type here (in type.aliasSymbol
+    // below), but Closure Compiler does not allow recursive type definitions.
+    if (this.seenTypeLiterals.has(type)) return '?';
+
+    // If type is an alias, e.g. from type X = A|B, then always emit the alias, not the underlying
+    // union type, as the alias is the user visible, imported symbol.
+    if (!resolveAlias && type.aliasSymbol) {
+      return this.symbolToString(type.aliasSymbol, /* useFqn */ true);
+    }
 
     let isAmbient = false;
     let isNamespace = false;
@@ -496,13 +521,7 @@ export class TypeTranslator {
    *   let x: {a: number};
    */
   private translateTypeLiteral(type: ts.Type): string {
-    // Avoid infinite loops on recursive types.
-    // It would be nice to just emit the name of the recursive type here,
-    // but type.symbol doesn't seem to have the name here (perhaps something
-    // to do with aliases?).
-    if (this.seenTypes.indexOf(type) !== -1) return '?';
-    this.seenTypes.push(type);
-
+    this.seenTypeLiterals.add(type);
     // Gather up all the named fields and whether the object is also callable.
     let callable = false;
     let indexable = false;
@@ -517,7 +536,7 @@ export class TypeTranslator {
     if (ctors.length) {
       // TODO(martinprobst): this does not support additional properties defined on constructors
       // (not expressible in Closure), nor multiple constructors (same).
-      const params = this.convertParams(ctors[0]);
+      const params = this.convertParams(ctors[0], ctors[0].declaration.parameters);
       const paramsStr = params.length ? (', ' + params.join(', ')) : '';
       const constructedType = this.translate(ctors[0].getReturnType());
       // In the specific case of the "new" in a function, it appears that
@@ -591,8 +610,28 @@ export class TypeTranslator {
 
   /** Converts a ts.Signature (function signature) to a Closure function type. */
   private signatureToClosure(sig: ts.Signature): string {
-    const params = this.convertParams(sig);
-    let typeStr = `function(${params.join(', ')})`;
+    // TODO(martinprobst): Consider harmonizing some overlap with emitFunctionType in tsickle.ts.
+
+    this.blacklistTypeParameters(this.symbolsToAliasedNames, sig.declaration.typeParameters);
+
+    let typeStr = `function(`;
+
+    let paramDecls: ReadonlyArray<ts.ParameterDeclaration> = sig.declaration.parameters;
+    const maybeThisParam = paramDecls[0];
+    // Oddly, the this type shows up in paramDecls, but not in the type's parameters.
+    // Handle it here and then pass paramDecls down without its first element.
+    if (maybeThisParam && maybeThisParam.name.getText() === 'this') {
+      if (maybeThisParam.type) {
+        const thisType = this.typeChecker.getTypeAtLocation(maybeThisParam.type);
+        typeStr += `this: (${this.translate(thisType)}), `;
+      } else {
+        this.warn('this type without type');
+      }
+      paramDecls = paramDecls.slice(1);
+    }
+
+    const params = this.convertParams(sig, paramDecls);
+    typeStr += `${params.join(', ')})`;
 
     const retType = this.translate(this.typeChecker.getReturnTypeOfSignature(sig));
     if (retType) {
@@ -602,11 +641,34 @@ export class TypeTranslator {
     return typeStr;
   }
 
-  private convertParams(sig: ts.Signature): string[] {
-    return sig.parameters.map(param => {
-      const paramType = this.typeChecker.getTypeOfSymbolAtLocation(param, this.node);
-      return this.translate(paramType);
-    });
+  /**
+   * Converts parameters for the given signature. Takes parameter declarations as those might not
+   * match the signature parameters (e.g. there might be an additional this parameter). This
+   * difference is handled by the caller, as is converting the "this" parameter.
+   */
+  private convertParams(sig: ts.Signature, paramDecls: ReadonlyArray<ts.ParameterDeclaration>):
+      string[] {
+    const paramTypes: string[] = [];
+    // The Signature itself does not include information on optional and var arg parameters.
+    // Use its declaration to recover that information.
+    const decl = sig.declaration;
+    for (let i = 0; i < sig.parameters.length; i++) {
+      const param = sig.parameters[i];
+
+      const paramDecl = paramDecls[i];
+      const optional = !!paramDecl.questionToken;
+      const varArgs = !!paramDecl.dotDotDotToken;
+      let paramType = this.typeChecker.getTypeOfSymbolAtLocation(param, this.node);
+      if (varArgs) {
+        const typeRef = paramType as ts.TypeReference;
+        paramType = typeRef.typeArguments![0];
+      }
+      let typeStr = this.translate(paramType);
+      if (varArgs) typeStr = '...' + typeStr;
+      if (optional) typeStr = typeStr + '=';
+      paramTypes.push(typeStr);
+    }
+    return paramTypes;
   }
 
   warn(msg: string) {
@@ -624,5 +686,32 @@ export class TypeTranslator {
       const fileName = path.normalize(n.getSourceFile().fileName);
       return pathBlackList.has(fileName);
     });
+  }
+
+  /**
+   * Closure doesn not support type parameters for function types, i.e. generic function types.
+   * Blacklist the symbols declared by them and emit a ? for the types.
+   *
+   * This mutates the given blacklist map. The map's scope is one file, and symbols are
+   * unique objects, so this should neither lead to excessive memory consumption nor introduce
+   * errors.
+   *
+   * @param blacklist a map to store the blacklisted symbols in, with a value of '?'. In practice,
+   *     this is always === this.symbolsToAliasedNames, but we're passing it explicitly to make it
+   *    clear that the map is mutated (in particular when used from outside the class).
+   * @param decls the declarations whose symbols should be blacklisted.
+   */
+  blacklistTypeParameters(
+      blacklist: Map<ts.Symbol, string>,
+      decls: ts.NodeArray<ts.TypeParameterDeclaration>|undefined) {
+    if (!decls || !decls.length) return;
+    for (const tpd of decls) {
+      const sym = this.typeChecker.getSymbolAtLocation(tpd.name);
+      if (!sym) {
+        this.warn(`type parameter with no symbol`);
+        continue;
+      }
+      this.symbolsToAliasedNames.set(sym, '?');
+    }
   }
 }

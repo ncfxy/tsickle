@@ -37,7 +37,7 @@ export function createSourceReplacingCompilerHost(
 
   function getSourceFile(
       fileName: string, languageVersion: ts.ScriptTarget,
-      onError?: (message: string) => void): ts.SourceFile {
+      onError?: (message: string) => void): ts.SourceFile|undefined {
     const path: string = ts.sys.resolvePath(fileName);
     const sourceText = substituteSource.get(path);
     if (sourceText !== undefined) {
@@ -52,4 +52,13 @@ export function createSourceReplacingCompilerHost(
  */
 export function normalizeLineEndings(input: string): string {
   return input.replace(/\r\n/g, '\n');
+}
+
+/** @return true if node has the specified modifier flag set. */
+export function hasModifierFlag(node: ts.Node, flag: ts.ModifierFlags): boolean {
+  return (ts.getCombinedModifierFlags(node) & flag) !== 0;
+}
+
+export function isDtsFileName(fileName: string): boolean {
+  return /\.d\.ts$/.test(fileName);
 }

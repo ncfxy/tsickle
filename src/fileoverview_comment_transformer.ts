@@ -6,10 +6,9 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import * as ts from 'typescript';
-
 import * as jsdoc from './jsdoc';
 import {createNotEmittedStatement, updateSourceFileNode} from './transformer_util';
+import * as ts from './typescript';
 
 /**
  * A set of JSDoc tags that mark a comment as a fileoverview comment. These are recognized by other
@@ -19,10 +18,22 @@ const FILEOVERVIEW_COMMENT_MARKERS: ReadonlySet<string> =
     new Set(['fileoverview', 'externs', 'modName', 'mods', 'pintomodule']);
 
 /**
+ * Returns true if the given comment is a \@fileoverview style comment in the Closure sense, i.e. a
+ * comment that has JSDoc tags marking it as a fileoverview comment.
+ * Note that this is different from TypeScript's understanding of the concept, where a file comment
+ * is a comment separated from the rest of the file by a double newline.
+ */
+export function isClosureFileoverviewComment(text: string) {
+  const current = jsdoc.parse(text);
+  return current !== null && current.tags.some(t => FILEOVERVIEW_COMMENT_MARKERS.has(t.tagName));
+}
+
+/**
  * A transformer that ensures the emitted JS file has an \@fileoverview comment that contains an
  * \@suppress {checkTypes} annotation by either adding or updating an existing comment.
  */
-export function transformFileoverviewComment(context: ts.TransformationContext) {
+export function transformFileoverviewComment(context: ts.TransformationContext):
+    (sf: ts.SourceFile) => ts.SourceFile {
   return (sf: ts.SourceFile) => {
     let comments: ts.SynthesizedComment[] = [];
     // Use trailing comments because that's what transformer_util.ts creates (i.e. by convention).

@@ -6,8 +6,8 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import * as ts from 'typescript';
-import * as tsickle from './tsickle';
+import * as ts from './typescript';
+import {hasModifierFlag} from './util';
 
 /**
  * Adjusts the given CustomTransformers with additional transformers
@@ -171,7 +171,7 @@ function emitMissingSyntheticCommentsAfterTypescriptTransform(context: ts.Transf
           }
         } else if (
             parent3 && parent3.kind === ts.SyntaxKind.VariableStatement &&
-            tsickle.hasModifierFlag(parent3, ts.ModifierFlags.Export)) {
+            hasModifierFlag(parent3, ts.ModifierFlags.Export)) {
           // TypeScript ignores synthetic comments on exported variables.
           // find the parent ExpressionStatement like exports.foo = ...
           const expressionStmt =
@@ -297,15 +297,13 @@ function resetNodeTextRangeToPreventDuplicateComments<T extends ts.Node>(node: T
   let allowTextRange = node.kind !== ts.SyntaxKind.ClassDeclaration &&
       node.kind !== ts.SyntaxKind.VariableDeclaration &&
       !(node.kind === ts.SyntaxKind.VariableStatement &&
-        tsickle.hasModifierFlag(node, ts.ModifierFlags.Export));
+        hasModifierFlag(node, ts.ModifierFlags.Export));
   if (node.kind === ts.SyntaxKind.PropertyDeclaration) {
     allowTextRange = false;
     const pd = node as ts.Node as ts.PropertyDeclaration;
-    // TODO(tbosch): Using pd.initializer! as the typescript typings before 2.4.0
-    // are incorrect. Remove this once we upgrade to TypeScript 2.4.0.
     node = ts.updateProperty(
-               pd, pd.decorators, pd.modifiers, resetTextRange(pd.name) as ts.PropertyName, pd.type,
-               pd.initializer!) as ts.Node as T;
+               pd, pd.decorators, pd.modifiers, resetTextRange(pd.name) as ts.PropertyName,
+               pd.questionToken, pd.type, pd.initializer) as ts.Node as T;
   }
   if (!allowTextRange) {
     node = resetTextRange(node);
@@ -375,6 +373,10 @@ function synthesizeTrailingComments(sourceFile: ts.SourceFile, node: ts.Node): n
   return -1;
 }
 
+function arrayOf<T>(value: T|undefined|null): T[] {
+  return value ? [value] : [];
+}
+
 /**
  * Convert leading/trailing detached comment ranges of statement arrays
  * (e.g. the statements of a ts.SourceFile or ts.Block) into
@@ -392,13 +394,32 @@ function visitNodeStatementsWithSynthesizedComments<T extends ts.Node>(
   const leading = synthesizeDetachedLeadingComments(sourceFile, node, statements);
   const trailing = synthesizeDetachedTrailingComments(sourceFile, node, statements);
   if (leading.commentStmt || trailing.commentStmt) {
-    statements = ts.setTextRange(ts.createNodeArray(statements), {pos: -1, end: -1});
-    if (leading.commentStmt) {
-      statements.unshift(leading.commentStmt);
-    }
-    if (trailing.commentStmt) {
-      statements.push(trailing.commentStmt);
-    }
+    const newStatements: ts.Statement[] =
+        [...arrayOf(leading.commentStmt), ...statements, ...arrayOf(trailing.commentStmt)];
+    statements = ts.setTextRange(ts.createNodeArray(newStatements), {pos: -1, end: -1});
+
+    /**
+     * The visitor creates a new node with the new statements. However, doing so
+     * reveals a TypeScript bug.
+     * To reproduce comment out the line below and compile:
+     *
+     * // ......
+     *
+     * abstract class A {
+     * }
+     * abstract class B extends A {
+     *   // ......
+     * }
+     *
+     * Note that newlines are significant. This would result in the following:
+     * runtime error "TypeError: Cannot read property 'members' of undefined".
+     *
+     * The line below is a workaround that ensures that updateSourceFileNode and
+     * updateBlock never create new Nodes.
+     * TODO(#634): file a bug with TS team.
+     */
+    (node as ts.Node as ts.SourceFile).statements = statements;
+
     const fileContext = assertFileContext(context, sourceFile);
     if (leading.lastCommentEnd !== -1) {
       fileContext.lastCommentEnd = leading.lastCommentEnd;
@@ -551,7 +572,7 @@ function synthesizeCommentRanges(
 /**
  * Creates a non emitted statement that can be used to store synthesized comments.
  */
-export function createNotEmittedStatement(sourceFile: ts.SourceFile) {
+export function createNotEmittedStatement(sourceFile: ts.SourceFile): ts.NotEmittedStatement {
   const stmt = ts.createNotEmittedStatement(sourceFile);
   ts.setOriginalNode(stmt, undefined);
   ts.setTextRange(stmt, {pos: 0, end: 0});
@@ -591,7 +612,7 @@ function getAllLeadingCommentRanges(
  * @param statements
  */
 export function visitEachChild(
-    node: ts.Node, visitor: ts.Visitor, context: ts.TransformationContext) {
+    node: ts.Node, visitor: ts.Visitor, context: ts.TransformationContext): ts.Node {
   if (node.kind === ts.SyntaxKind.SourceFile) {
     const sf = node as ts.SourceFile;
     return updateSourceFileNode(sf, ts.visitLexicalEnvironment(sf.statements, visitor, context));
@@ -604,6 +625,7 @@ export function visitEachChild(
  * This is a version of `ts.updateSourceFileNode` that works
  * well with property decorators.
  * See https://github.com/Microsoft/TypeScript/issues/17384
+ * TODO(#634): This has been fixed in TS 2.5. Investigate removal.
  *
  * @param sf
  * @param statements

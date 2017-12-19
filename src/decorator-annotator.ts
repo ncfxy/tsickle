@@ -7,12 +7,12 @@
  */
 
 import {SourceMapGenerator} from 'source-map';
-import * as ts from 'typescript';
 
 import {getDecoratorDeclarations} from './decorators';
 import {getIdentifierText, Rewriter} from './rewriter';
 import {SourceMapper} from './source_map_utils';
 import {TypeTranslator} from './type-translator';
+import * as ts from './typescript';
 
 /**
  * ConstructorParameters are gathered from constructors, so that their type information and
@@ -349,7 +349,7 @@ class DecoratorRewriter extends Rewriter {
   private importedNames: Array<{name: ts.Identifier, declarationNames: ts.Identifier[]}> = [];
 
   constructor(
-      private typeChecker: ts.TypeChecker, sourceFile: ts.SourceFile, sourceMapper?: SourceMapper) {
+      private typeChecker: ts.TypeChecker, sourceFile: ts.SourceFile, sourceMapper: SourceMapper) {
     super(sourceFile, sourceMapper);
   }
 
@@ -464,6 +464,6 @@ export function visitClassContentIncludingDecorators(
 
 export function convertDecorators(
     typeChecker: ts.TypeChecker, sourceFile: ts.SourceFile,
-    sourceMapper?: SourceMapper): {output: string, diagnostics: ts.Diagnostic[]} {
+    sourceMapper: SourceMapper): {output: string, diagnostics: ts.Diagnostic[]} {
   return new DecoratorRewriter(typeChecker, sourceFile, sourceMapper).process();
 }

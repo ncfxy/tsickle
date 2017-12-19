@@ -13,8 +13,6 @@ import {SourceMapConsumer} from 'source-map';
 import * as ts from 'typescript';
 
 import * as cliSupport from '../src/cli_support';
-import {convertDecorators} from '../src/decorator-annotator';
-import {DefaultSourceMapper} from '../src/source_map_utils';
 import * as tsickle from '../src/tsickle';
 
 import {createAstPrintingTransform} from './ast_printing_transform';
@@ -54,6 +52,8 @@ describe('decorator-annotator', () => {
       googmodule: true,
       es5Mode: false,
       untyped: false,
+      options: compilerOptions,
+      host,
     };
 
     const files = new Map<string, string>();
@@ -440,6 +440,41 @@ class ViewUtils {
     } | null)[] = () => [
         { type: undefined, decorators: [{ type: Inject, args: [APP_ID,] },] },
     ];
+}
+`);
+    });
+
+    // Regression #674
+    it('should leave annotations not down-leveled', () => {
+      expectTranslated(`
+        /** @Annotation */ var RemoveMe: Function = undefined as any;
+
+        var KeepMe: Function = undefined as any;
+
+        @KeepMe()
+        @RemoveMe()
+        class ViewUtils {
+          constructor() {}
+        }
+        `).to.equal(`/** @Annotation */ var RemoveMe: Function = (undefined as any);
+var KeepMe: Function = (undefined as any);
+@KeepMe()
+class ViewUtils {
+    constructor() { }
+    static decorators: {
+        type: Function;
+        args?: any[];
+    }[] = [
+        { type: RemoveMe },
+    ];
+    /** @nocollapse */
+    static ctorParameters: () => ({
+        type: any;
+        decorators?: {
+            type: Function;
+            args?: any[];
+        }[];
+    } | null)[] = () => [];
 }
 `);
     });

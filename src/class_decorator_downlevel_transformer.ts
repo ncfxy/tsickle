@@ -6,10 +6,9 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import * as ts from 'typescript';
-
 import {shouldLower} from './decorator-annotator';
 import {visitEachChild} from './transformer_util';
+import * as ts from './typescript';
 
 /**
  * Creates the AST for the decorator field type annotation, which has the form
@@ -96,13 +95,18 @@ function isNameEqual(classMember: ts.ClassElement, name: string): boolean {
  * transformers
  */
 function insertBeforeDecoratorProperties(
-    classMembers: ts.NodeArray<ts.ClassElement>, decoratorMetadata: ts.PropertyDeclaration) {
+    classMembers: ts.NodeArray<ts.ClassElement>,
+    decoratorMetadata: ts.PropertyDeclaration): ts.NodeArray<ts.ClassElement> {
   let insertionPoint = classMembers.findIndex(
       m => isNameEqual(m, 'ctorParameters') || isNameEqual(m, 'propDecorators'));
   if (insertionPoint === -1) {
     insertionPoint = classMembers.length - 1;
   }
-  classMembers.splice(insertionPoint, 0, decoratorMetadata);
+  const members = [
+    ...classMembers.slice(0, insertionPoint), decoratorMetadata,
+    ...classMembers.slice(insertionPoint)
+  ];
+  return ts.setTextRange(ts.createNodeArray(members, classMembers.hasTrailingComma), classMembers);
 }
 
 export function classDecoratorDownlevelTransformer(
@@ -118,9 +122,12 @@ export function classDecoratorDownlevelTransformer(
           if (decorators === undefined || decorators.length === 0) return cd;
 
           const decoratorList = [];
+          const decoratorsToKeep: ts.Decorator[] = [];
           for (const decorator of decorators) {
             if (shouldLower(decorator, typeChecker)) {
               decoratorList.push(extractMetadataFromSingleDecorator(decorator, diagnostics));
+            } else {
+              decoratorsToKeep.push(decorator);
             }
           }
 
@@ -128,10 +135,11 @@ export function classDecoratorDownlevelTransformer(
 
           const newClassDeclaration = ts.getMutableClone(cd);
 
-          insertBeforeDecoratorProperties(
+          newClassDeclaration.members = insertBeforeDecoratorProperties(
               newClassDeclaration.members, createDecoratorClassProperty(decoratorList));
 
-          newClassDeclaration.decorators = undefined;
+          newClassDeclaration.decorators =
+              decoratorsToKeep.length ? ts.createNodeArray(decoratorsToKeep) : undefined;
 
           return newClassDeclaration;
         default:
