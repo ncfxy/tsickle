@@ -1434,23 +1434,25 @@ var Annotator = (function (_super) {
             return;
         var docTags = this.getJSDoc(iface) || [];
         docTags.push({ tagName: 'record' });
+        docTags.push({ tagName: 'interface' });
         if (!this.host.untyped) {
             this.maybeAddTemplateClause(docTags, iface);
             this.maybeAddHeritageClauses(docTags, iface);
         }
         this.emit('\n');
         this.emit(jsdoc.toString(docTags));
-        if (hasModifierFlag(iface, ts.ModifierFlags.Export))
-            this.emit('export ');
+        // if (hasModifierFlag(iface, ts.ModifierFlags.Export)) this.emit('export ');
         var name = rewriter_1.getIdentifierText(iface.name);
-        this.emit("function " + name + "() {}\n");
-        this.emit("\n\nfunction " + name + "_tsickle_Closure_declarations() {\n");
-        var memberNamespace = [name, 'prototype'];
+        // this.emit(`function ${name}() {}\n`);
+        var namespaceStr = this.namespaceList.join('.') + '.';
+        this.emit(namespaceStr + sym.name + ' = function() {};\n');
+        // this.emit(`\n\nfunction ${name}_tsickle_Closure_declarations() {\n`);
+        // const memberNamespace = [name, 'prototype'];
+        var memberNamespace = [];
         try {
-            for (var _a = __values(iface.members), _b = _a.next(); !_b.done; _b = _a.next()) {
-                var elem = _b.value;
-                var isOptional = elem.questionToken != null;
-                this.visitProperty(memberNamespace, elem, isOptional);
+            for (var _a = __values(this.namespaceList), _b = _a.next(); !_b.done; _b = _a.next()) {
+                var space = _b.value;
+                memberNamespace.push(space);
             }
         }
         catch (e_12_1) { e_12 = { error: e_12_1 }; }
@@ -1460,8 +1462,23 @@ var Annotator = (function (_super) {
             }
             finally { if (e_12) throw e_12.error; }
         }
-        this.emit("}\n");
-        var e_12, _c;
+        memberNamespace.push(name, 'prototype');
+        try {
+            for (var _d = __values(iface.members), _e = _d.next(); !_e.done; _e = _d.next()) {
+                var elem = _e.value;
+                var isOptional = elem.questionToken != null;
+                this.visitProperty(memberNamespace, elem, isOptional);
+            }
+        }
+        catch (e_13_1) { e_13 = { error: e_13_1 }; }
+        finally {
+            try {
+                if (_e && !_e.done && (_f = _d.return)) _f.call(_d);
+            }
+            finally { if (e_13) throw e_13.error; }
+        }
+        var e_12, _c, e_13, _f;
+        // this.emit(`}\n`);
     };
     /**
      * emitTypeAnnotationsHelper produces a _tsickle_typeAnnotationsHelper() where
@@ -1502,12 +1519,12 @@ var Annotator = (function (_super) {
                 }
             }
         }
-        catch (e_13_1) { e_13 = { error: e_13_1 }; }
+        catch (e_14_1) { e_14 = { error: e_14_1 }; }
         finally {
             try {
                 if (_b && !_b.done && (_c = _a.return)) _c.call(_a);
             }
-            finally { if (e_13) throw e_13.error; }
+            finally { if (e_14) throw e_14.error; }
         }
         if (ctors.length > 0) {
             var ctor = ctors[0];
@@ -1545,15 +1562,15 @@ var Annotator = (function (_super) {
                 this.emit(memberNamespace.join('.') + "." + name_4 + " = function(" + paramNames.join(', ') + ") {};\n");
             }
         }
-        catch (e_14_1) { e_14 = { error: e_14_1 }; }
+        catch (e_15_1) { e_15 = { error: e_15_1 }; }
         finally {
             try {
                 if (abstractMethods_1_1 && !abstractMethods_1_1.done && (_d = abstractMethods_1.return)) _d.call(abstractMethods_1);
             }
-            finally { if (e_14) throw e_14.error; }
+            finally { if (e_15) throw e_15.error; }
         }
         this.emit("}\n");
-        var e_13, _c, e_14, _d;
+        var e_14, _c, e_15, _d;
     };
     Annotator.prototype.propertyName = function (prop) {
         if (!prop.name)
@@ -1664,12 +1681,12 @@ var Annotator = (function (_super) {
                 }
             }
         }
-        catch (e_15_1) { e_15 = { error: e_15_1 }; }
+        catch (e_16_1) { e_16 = { error: e_16_1 }; }
         finally {
             try {
                 if (_b && !_b.done && (_c = _a.return)) _c.call(_a);
             }
-            finally { if (e_15) throw e_15.error; }
+            finally { if (e_16) throw e_16.error; }
         }
         if (hasNumber && hasString) {
             return 'number|string';
@@ -1684,7 +1701,7 @@ var Annotator = (function (_super) {
             // Perhaps an empty enum?
             return '?';
         }
-        var e_15, _c;
+        var e_16, _c;
     };
     /**
      * Processes an EnumDeclaration into a Closure type. Always emits a Closure type, even in untyped
@@ -1745,12 +1762,12 @@ var Annotator = (function (_super) {
                 this.emit(',');
             }
         }
-        catch (e_16_1) { e_16 = { error: e_16_1 }; }
+        catch (e_17_1) { e_17 = { error: e_17_1 }; }
         finally {
             try {
                 if (_b && !_b.done && (_c = _a.return)) _c.call(_a);
             }
-            finally { if (e_16) throw e_16.error; }
+            finally { if (e_17) throw e_17.error; }
         }
         this.emit('};\n');
         var isExported = hasModifierFlag(node, ts.ModifierFlags.Export);
@@ -1772,15 +1789,15 @@ var Annotator = (function (_super) {
                     this.emit(name + "[" + name + "." + memberName + "] = \"" + memberName + "\";\n");
                 }
             }
-            catch (e_17_1) { e_17 = { error: e_17_1 }; }
+            catch (e_18_1) { e_18 = { error: e_18_1 }; }
             finally {
                 try {
                     if (_e && !_e.done && (_f = _d.return)) _f.call(_d);
                 }
-                finally { if (e_17) throw e_17.error; }
+                finally { if (e_18) throw e_18.error; }
             }
         }
-        var e_16, _c, e_17, _f;
+        var e_17, _c, e_18, _f;
     };
     return Annotator;
 }(ClosureRewriter));
@@ -1818,12 +1835,12 @@ var ExternsWriter = (function (_super) {
                         this.visit(stmt, namespace);
                     }
                 }
-                catch (e_18_1) { e_18 = { error: e_18_1 }; }
+                catch (e_19_1) { e_19 = { error: e_19_1 }; }
                 finally {
                     try {
                         if (_b && !_b.done && (_c = _a.return)) _c.call(_a);
                     }
-                    finally { if (e_18) throw e_18.error; }
+                    finally { if (e_19) throw e_19.error; }
                 }
                 break;
             case ts.SyntaxKind.ModuleDeclaration:
@@ -1884,12 +1901,12 @@ var ExternsWriter = (function (_super) {
                         this.visit(stmt, namespace);
                     }
                 }
-                catch (e_19_1) { e_19 = { error: e_19_1 }; }
+                catch (e_20_1) { e_20 = { error: e_20_1 }; }
                 finally {
                     try {
                         if (_e && !_e.done && (_f = _d.return)) _f.call(_d);
                     }
-                    finally { if (e_19) throw e_19.error; }
+                    finally { if (e_20) throw e_20.error; }
                 }
                 break;
             case ts.SyntaxKind.ClassDeclaration:
@@ -1919,12 +1936,12 @@ var ExternsWriter = (function (_super) {
                         this.writeExternsVariableDecl(decl_1, namespace);
                     }
                 }
-                catch (e_20_1) { e_20 = { error: e_20_1 }; }
+                catch (e_21_1) { e_21 = { error: e_21_1 }; }
                 finally {
                     try {
                         if (_h && !_h.done && (_j = _g.return)) _j.call(_g);
                     }
-                    finally { if (e_20) throw e_20.error; }
+                    finally { if (e_21) throw e_21.error; }
                 }
                 break;
             case ts.SyntaxKind.EnumDeclaration:
@@ -1937,7 +1954,7 @@ var ExternsWriter = (function (_super) {
                 this.emit("\n/* TODO: " + ts.SyntaxKind[node.kind] + " in " + namespace.join('.') + " */\n");
                 break;
         }
-        var e_18, _c, e_19, _f, e_20, _j;
+        var e_19, _c, e_20, _f, e_21, _j;
     };
     /**
      * isFirstDeclaration returns true if decl is the first declaration
@@ -2043,12 +2060,12 @@ var ExternsWriter = (function (_super) {
                 this.emit("\n/* TODO: " + ts.SyntaxKind[member.kind] + ": " + memberName.join('.') + " */\n");
             }
         }
-        catch (e_21_1) { e_21 = { error: e_21_1 }; }
+        catch (e_22_1) { e_22 = { error: e_22_1 }; }
         finally {
             try {
                 if (_b && !_b.done && (_c = _a.return)) _c.call(_a);
             }
-            finally { if (e_21) throw e_21.error; }
+            finally { if (e_22) throw e_22.error; }
         }
         try {
             // Handle method declarations/signatures separately, since we need to deal with overloads.
@@ -2070,14 +2087,14 @@ var ExternsWriter = (function (_super) {
                 this.writeExternsFunction(firstMethodVariant.name, parameterNames, methodNamespace);
             }
         }
-        catch (e_22_1) { e_22 = { error: e_22_1 }; }
+        catch (e_23_1) { e_23 = { error: e_23_1 }; }
         finally {
             try {
                 if (_e && !_e.done && (_f = _d.return)) _f.call(_d);
             }
-            finally { if (e_22) throw e_22.error; }
+            finally { if (e_23) throw e_23.error; }
         }
-        var e_21, _c, e_22, _f;
+        var e_22, _c, e_23, _f;
     };
     ExternsWriter.prototype.writeExternsVariableDecl = function (decl, namespace) {
         if (decl.name.kind === ts.SyntaxKind.Identifier) {
@@ -2147,14 +2164,14 @@ var ExternsWriter = (function (_super) {
                 this.writeExternsVariable(memberName, namespace);
             }
         }
-        catch (e_23_1) { e_23 = { error: e_23_1 }; }
+        catch (e_24_1) { e_24 = { error: e_24_1 }; }
         finally {
             try {
                 if (_b && !_b.done && (_c = _a.return)) _c.call(_a);
             }
-            finally { if (e_23) throw e_23.error; }
+            finally { if (e_24) throw e_24.error; }
         }
-        var e_23, _c;
+        var e_24, _c;
     };
     ExternsWriter.prototype.writeExternsTypeAlias = function (decl, namespace) {
         this.emit("\n/** @typedef {" + this.typeToClosure(decl) + "} */\n");
@@ -2190,15 +2207,15 @@ function getGeneratedExterns(externs) {
             allExterns += externs[fileName];
         }
     }
-    catch (e_24_1) { e_24 = { error: e_24_1 }; }
+    catch (e_25_1) { e_25 = { error: e_25_1 }; }
     finally {
         try {
             if (_b && !_b.done && (_c = _a.return)) _c.call(_a);
         }
-        finally { if (e_24) throw e_24.error; }
+        finally { if (e_25) throw e_25.error; }
     }
     return allExterns;
-    var e_24, _c;
+    var e_25, _c;
 }
 exports.getGeneratedExterns = getGeneratedExterns;
 function mergeEmitResults(emitResults) {
@@ -2217,15 +2234,15 @@ function mergeEmitResults(emitResults) {
             modulesManifest.addManifest(er.modulesManifest);
         }
     }
-    catch (e_25_1) { e_25 = { error: e_25_1 }; }
+    catch (e_26_1) { e_26 = { error: e_26_1 }; }
     finally {
         try {
             if (emitResults_1_1 && !emitResults_1_1.done && (_a = emitResults_1.return)) _a.call(emitResults_1);
         }
-        finally { if (e_25) throw e_25.error; }
+        finally { if (e_26) throw e_26.error; }
     }
     return { diagnostics: diagnostics, emitSkipped: emitSkipped, emittedFiles: emittedFiles, externs: externs, modulesManifest: modulesManifest };
-    var e_25, _a;
+    var e_26, _a;
 }
 exports.mergeEmitResults = mergeEmitResults;
 function emitWithTsickle(program, host, tsHost, tsOptions, targetSourceFile, writeFile, cancellationToken, emitOnlyDtsFiles, customTransformers) {
@@ -2359,15 +2376,15 @@ function combineSourceMaps(program, filePath, tscSourceMapText) {
             tscSourceMapGenerator.applySourceMap(new source_map_1.SourceMapConsumer(source_map_utils_1.parseSourceMap(preexistingSourceMapText, sourceFileName)));
         }
     }
-    catch (e_26_1) { e_26 = { error: e_26_1 }; }
+    catch (e_27_1) { e_27 = { error: e_27_1 }; }
     finally {
         try {
             if (_b && !_b.done && (_c = _a.return)) _c.call(_a);
         }
-        finally { if (e_26) throw e_26.error; }
+        finally { if (e_27) throw e_27.error; }
     }
     return tscSourceMapGenerator ? tscSourceMapGenerator.toString() : tscSourceMapText;
-    var e_26, _c;
+    var e_27, _c;
 }
 
 //# sourceMappingURL=tsickle.js.map

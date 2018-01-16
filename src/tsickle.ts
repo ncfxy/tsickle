@@ -1366,6 +1366,7 @@ class Annotator extends ClosureRewriter {
 
     const docTags = this.getJSDoc(iface) || [];
     docTags.push({tagName: 'record'});
+    
     if (!this.host.untyped) {
       this.maybeAddTemplateClause(docTags, iface);
       this.maybeAddHeritageClauses(docTags, iface);
@@ -1374,17 +1375,25 @@ class Annotator extends ClosureRewriter {
     this.emit('\n');
     this.emit(jsdoc.toString(docTags));
 
-    if (hasModifierFlag(iface, ts.ModifierFlags.Export)) this.emit('export ');
+    // if (hasModifierFlag(iface, ts.ModifierFlags.Export)) this.emit('export ');
     const name = getIdentifierText(iface.name);
-    this.emit(`function ${name}() {}\n`);
+    // this.emit(`function ${name}() {}\n`);
+    const namespaceStr = this.namespaceList.join('.') + '.';
+    this.emit(namespaceStr+sym.name + ' = function() {};\n');
 
-    this.emit(`\n\nfunction ${name}_tsickle_Closure_declarations() {\n`);
-    const memberNamespace = [name, 'prototype'];
+
+    // this.emit(`\n\nfunction ${name}_tsickle_Closure_declarations() {\n`);
+    // const memberNamespace = [name, 'prototype'];
+    const memberNamespace = [];
+    for(const space of this.namespaceList){
+      memberNamespace.push(space);
+    }
+    memberNamespace.push(name, 'prototype');
     for (const elem of iface.members) {
       const isOptional = elem.questionToken != null;
       this.visitProperty(memberNamespace, elem, isOptional);
     }
-    this.emit(`}\n`);
+    // this.emit(`}\n`);
   }
 
   /**
