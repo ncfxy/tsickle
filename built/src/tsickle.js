@@ -1433,7 +1433,8 @@ var Annotator = (function (_super) {
         if (sym.flags & ts.SymbolFlags.Value)
             return;
         var docTags = this.getJSDoc(iface) || [];
-        docTags.push({ tagName: 'record' });
+        // docTags.push({tagName: 'record'});
+        docTags.push({ tagName: 'interface' });
         if (!this.host.untyped) {
             this.maybeAddTemplateClause(docTags, iface);
             this.maybeAddHeritageClauses(docTags, iface);

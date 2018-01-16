@@ -1365,7 +1365,8 @@ class Annotator extends ClosureRewriter {
     if (sym.flags & ts.SymbolFlags.Value) return;
 
     const docTags = this.getJSDoc(iface) || [];
-    docTags.push({tagName: 'record'});
+    // docTags.push({tagName: 'record'});
+    docTags.push({tagName: 'interface'});
     
     if (!this.host.untyped) {
       this.maybeAddTemplateClause(docTags, iface);
