@@ -1393,6 +1393,7 @@ class Annotator extends ClosureRewriter {
       const isOptional = elem.questionToken != null;
       this.visitProperty(memberNamespace, elem, isOptional);
     }
+    this.emit('\n');
     // this.emit(`}\n`);
   }
 

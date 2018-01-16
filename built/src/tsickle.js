@@ -1434,7 +1434,6 @@ var Annotator = (function (_super) {
             return;
         var docTags = this.getJSDoc(iface) || [];
         docTags.push({ tagName: 'record' });
-        docTags.push({ tagName: 'interface' });
         if (!this.host.untyped) {
             this.maybeAddTemplateClause(docTags, iface);
             this.maybeAddHeritageClauses(docTags, iface);
@@ -1477,6 +1476,7 @@ var Annotator = (function (_super) {
             }
             finally { if (e_13) throw e_13.error; }
         }
+        this.emit('\n');
         var e_12, _c, e_13, _f;
         // this.emit(`}\n`);
     };
