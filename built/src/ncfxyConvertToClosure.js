@@ -41,7 +41,7 @@ var baseCompilerOptions = {
 /** The TypeScript compiler options used by the test suite. */
 exports.compilerOptions = __assign({}, baseCompilerOptions, { emitDecoratorMetadata: true, noEmitHelpers: true, jsx: ts.JsxEmit.React, 
     // Flags below are needed to make sure source paths are correctly set on write calls.
-    rootDir: path.resolve(process.cwd()), outDir: 'ncfxyOut', declaration: true, declarationDir: "ncfxyOutDeclaration" });
+    rootDir: path.resolve(process.cwd()), outDir: 'ncfxyOut', declaration: false, declarationDir: "ncfxyOutDeclaration" });
 var _a = (function () {
     var host = ts.createCompilerHost(baseCompilerOptions);
     var fn = host.getDefaultLibFileName(baseCompilerOptions);

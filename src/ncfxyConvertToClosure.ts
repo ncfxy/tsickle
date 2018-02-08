@@ -33,7 +33,7 @@ export const compilerOptions: ts.CompilerOptions = {
     // Flags below are needed to make sure source paths are correctly set on write calls.
     rootDir: path.resolve(process.cwd()),
     outDir: 'ncfxyOut',
-    declaration:true,
+    declaration:false,
     declarationDir:"ncfxyOutDeclaration"
 };
 
