@@ -810,7 +810,7 @@ var Annotator = (function (_super) {
                 var constructorTag = {
                     tagName: 'constructor'
                 };
-                if (this.nowClassHeritageClause) {
+                if (this.nowClassHeritageClause[0]) {
                     var extendsTag = {
                         tagName: 'extends',
                         type: this.nowClassHeritageClause[0]
@@ -824,7 +824,7 @@ var Annotator = (function (_super) {
                 // Write the "constructor(...) {" bit, but iterate through any
                 // parameters if given so that we can examine them more closely.
                 this.writeNodeFrom(ctor, ctor.getStart() + 11);
-                if (this.nowClassHeritageClause) {
+                if (this.nowClassHeritageClause[0]) {
                     this.emit('\ngoog.inherits(' + this.namespaceList.join('.') + '.' + this.nowClass + ', ' + this.nowClassHeritageClause + ');\n');
                 }
                 return true;

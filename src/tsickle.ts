@@ -757,7 +757,7 @@ class Annotator extends ClosureRewriter {
           tagName: 'constructor'
         };
 
-        if(this.nowClassHeritageClause){
+        if(this.nowClassHeritageClause[0]){
           const extendsTag: jsdoc.Tag = {
             tagName: 'extends',
             type: this.nowClassHeritageClause[0]
@@ -770,7 +770,7 @@ class Annotator extends ClosureRewriter {
         // Write the "constructor(...) {" bit, but iterate through any
         // parameters if given so that we can examine them more closely.
         this.writeNodeFrom(ctor, ctor.getStart()+11);
-        if(this.nowClassHeritageClause){
+        if(this.nowClassHeritageClause[0]){
           this.emit('\ngoog.inherits('+this.namespaceList.join('.')+'.'+this.nowClass+', '+this.nowClassHeritageClause+');\n');
         }
         return true;
