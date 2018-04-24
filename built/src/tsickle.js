@@ -810,16 +810,23 @@ var Annotator = (function (_super) {
                 var constructorTag = {
                     tagName: 'constructor'
                 };
-                var extendsTag = {
-                    tagName: 'extends',
-                    type: this.nowClassHeritageClause[0]
-                };
-                this.emitFunctionType([ctor], [constructorTag, extendsTag]);
+                if (this.nowClassHeritageClause) {
+                    var extendsTag = {
+                        tagName: 'extends',
+                        type: this.nowClassHeritageClause[0]
+                    };
+                    this.emitFunctionType([ctor], [constructorTag, extendsTag]);
+                }
+                else {
+                    this.emitFunctionType([ctor], [constructorTag]);
+                }
                 this.emit(this.namespaceList.join('.') + '.' + this.nowClass + ' = function');
                 // Write the "constructor(...) {" bit, but iterate through any
                 // parameters if given so that we can examine them more closely.
                 this.writeNodeFrom(ctor, ctor.getStart() + 11);
-                this.emit('\ngoog.inherits(' + this.namespaceList.join('.') + '.' + this.nowClass + ', ' + this.nowClassHeritageClause + ');\n');
+                if (this.nowClassHeritageClause) {
+                    this.emit('\ngoog.inherits(' + this.namespaceList.join('.') + '.' + this.nowClass + ', ' + this.nowClassHeritageClause + ');\n');
+                }
                 return true;
             case ts.SyntaxKind.ArrowFunction:
                 // It's difficult to annotate arrow functions due to a bug in
